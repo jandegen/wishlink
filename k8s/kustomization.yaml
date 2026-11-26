@@ -1,0 +1,15 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: wishlink-dev
+resources:
+  - deployment.yaml
+configMapGenerator:
+  - name: wishlink-config
+    literals:
+      - PUBLIC_URL=https://wishlink.example.com
+generatorOptions:
+  disableNameSuffixHash: true
+images:
+  - name: wishlink
+    newName: ghcr.io/jandegen/wishlink   # CI sets the tag (kustomize edit set image)
+    newTag: latest

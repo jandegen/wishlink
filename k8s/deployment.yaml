@@ -1,0 +1,93 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: wishlink-data
+spec:
+  accessModes: ["ReadWriteOnce"]
+  storageClassName: local-path
+  resources:
+    requests:
+      storage: 1Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: wishlink
+spec:
+  replicas: 1            # SQLite on a RWO volume -> exactly one instance
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels: { app: wishlink }
+  template:
+    metadata:
+      labels: { app: wishlink }
+    spec:
+      securityContext:
+        fsGroup: 1000
+      # The cluster search domain has a wildcard DNS record; ndots:1 makes external names resolve directly.
+      dnsConfig:
+        options:
+          - { name: ndots, value: "1" }
+      imagePullSecrets:
+        - name: gitlab-registry
+      containers:
+        - name: wishlink
+          image: wishlink:latest   # replaced by CI (kustomize edit set image)
+          ports:
+            - containerPort: 3000
+          env:
+            - { name: PUBLIC_URL, valueFrom: { configMapKeyRef: { name: wishlink-config, key: PUBLIC_URL } } }
+            - { name: TRUST_PROXY, value: "true" }
+            - { name: ADMIN_USERNAME, value: admin }
+            - { name: ADMIN_PASSWORD, valueFrom: { secretKeyRef: { name: wishlink-secrets, key: ADMIN_PASSWORD, optional: true } } }
+            - { name: OIDC_ISSUER, valueFrom: { configMapKeyRef: { name: wishlink-oidc, key: OIDC_ISSUER, optional: true } } }
+            - { name: OIDC_CLIENT_ID, valueFrom: { configMapKeyRef: { name: wishlink-oidc, key: OIDC_CLIENT_ID, optional: true } } }
+            - { name: OIDC_CLIENT_SECRET, valueFrom: { secretKeyRef: { name: wishlink-secrets, key: OIDC_CLIENT_SECRET, optional: true } } }
+          readinessProbe:
+            httpGet: { path: /api/health, port: 3000 }
+            initialDelaySeconds: 3
+          livenessProbe:
+            httpGet: { path: /api/health, port: 3000 }
+            initialDelaySeconds: 10
+          resources:
+            requests: { cpu: 50m, memory: 64Mi }
+            limits: { memory: 256Mi }
+          securityContext:
+            allowPrivilegeEscalation: false
+            runAsNonRoot: true
+            runAsUser: 1000
+          volumeMounts:
+            - { name: data, mountPath: /data }
+      volumes:
+        - name: data
+          persistentVolumeClaim: { claimName: wishlink-data }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: wishlink
+spec:
+  selector: { app: wishlink }
+  ports:
+    - { port: 80, targetPort: 3000 }
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: wishlink
+  annotations:
+    cert-manager.io/cluster-issuer: my-cluster-issuer
+spec:
+  ingressClassName: nginx
+  tls:
+    - hosts: [wishlink.example.com]
+      secretName: wishlink-tls
+  rules:
+    - host: wishlink.example.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service: { name: wishlink, port: { number: 80 } }

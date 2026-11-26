@@ -1,0 +1,34 @@
+services:
+  wishlink:
+    build: .
+    # image: registry.example.com/group/wishlink:latest   # alternative: use a pre-built image
+    restart: unless-stopped
+    ports:
+      - "${WISHLINK_PORT:-3000}:3000"
+    environment:
+      PUBLIC_URL: ${PUBLIC_URL:-http://localhost:3000}
+      # Set to true when running behind a reverse proxy that terminates TLS
+      TRUST_PROXY: ${TRUST_PROXY:-false}
+      # Initial admin account (created on first start if ADMIN_PASSWORD is set)
+      ADMIN_USERNAME: ${ADMIN_USERNAME:-admin}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
+      # Optional OIDC login (Keycloak). Leave OIDC_ISSUER empty to disable.
+      OIDC_ISSUER: ${OIDC_ISSUER:-}
+      OIDC_CLIENT_ID: ${OIDC_CLIENT_ID:-wishlink}
+      OIDC_CLIENT_SECRET: ${OIDC_CLIENT_SECRET:-}
+    volumes:
+      - wishlink-data:/data
+
+  # Optional local Keycloak for trying out OIDC: `docker compose --profile oidc up`
+  keycloak:
+    profiles: ["oidc"]
+    image: quay.io/keycloak/keycloak:26.0
+    command: start-dev
+    environment:
+      KC_BOOTSTRAP_ADMIN_USERNAME: admin
+      KC_BOOTSTRAP_ADMIN_PASSWORD: admin
+    ports:
+      - "8080:8080"
+
+volumes:
+  wishlink-data:

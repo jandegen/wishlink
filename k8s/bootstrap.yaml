@@ -1,0 +1,38 @@
+# One-time bootstrap by a cluster admin (the pipeline does not apply this):
+#   kubectl apply -f k8s/bootstrap.yaml
+# Creates the DEV namespace and lets the GitLab runner's job pods (service account
+# gitlab-runner/default) deploy into it - same pattern as the other homelab projects.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: wishlink-dev
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: gitlab-ci-deployer
+  namespace: wishlink-dev
+rules:
+  - apiGroups: [""]
+    resources: ["services", "configmaps", "secrets", "persistentvolumeclaims", "pods", "pods/log"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["apps"]
+    resources: ["deployments", "replicasets"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["networking.k8s.io"]
+    resources: ["ingresses"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: gitlab-ci-deployer
+  namespace: wishlink-dev
+subjects:
+  - kind: ServiceAccount
+    name: default
+    namespace: gitlab-runner
+roleRef:
+  kind: Role
+  name: gitlab-ci-deployer
+  apiGroup: rbac.authorization.k8s.io

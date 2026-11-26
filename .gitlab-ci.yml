@@ -1,0 +1,287 @@
+# WishLink pipeline: test -> build -> deploy (DEV on the local k3s cluster) -> release (on version tags)
+#
+# DEV URL: https://wishlink.example.com  (nginx ingress + cert-manager my-cluster-issuer)
+# Runner: homelab k3s runner (tags k3s, docker); deploys with the runner's service account.
+# One-time cluster bootstrap (admin):  kubectl apply -f k8s/bootstrap.yaml
+# CI/CD variables: ADMIN_PASSWORD (masked) = initial password of the account "admin" (created on first start only);
+# optional for Keycloak login: OIDC_ISSUER, OIDC_CLIENT_ID, OIDC_CLIENT_SECRET (masked)
+
+stages: [test, build, deploy, release]
+
+workflow:
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+    - if: $CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+$/
+
+variables:
+  KUBE_NAMESPACE: wishlink-dev
+  PLAYWRIGHT_VERSION: "1.56.1"
+
+default:
+  tags: [k3s, docker]
+
+.node:
+  image: node:22-alpine
+  before_script:
+    - npm ci --cache .npm --prefer-offline
+  cache:
+    key: { files: [package-lock.json] }
+    paths: [.npm/]
+
+lint:
+  extends: .node
+  stage: test
+  script: [npm run lint]
+
+unit-test:
+  extends: .node
+  stage: test
+  before_script:
+    - apk add --no-cache git  # the repository-wide mirror test lists the tracked files
+    - npm ci --cache .npm --prefer-offline
+  script:
+    - node --test --test-reporter=spec --test-reporter=junit --test-reporter-destination=stdout --test-reporter-destination=unit-junit.xml "test/unit/**/*.test.js"
+  artifacts:
+    when: always
+    reports: { junit: unit-junit.xml }
+
+e2e-test:
+  stage: test
+  image: mcr.microsoft.com/playwright:v${PLAYWRIGHT_VERSION}-noble
+  before_script: [npm ci]
+  script: [npm run test:e2e]
+  artifacts:
+    when: always
+    paths: [test-results/]
+    reports: { junit: test-results/e2e-junit.xml }
+    expire_in: 1 week
+
+audit:
+  extends: .node
+  stage: test
+  before_script: []
+  script: [npm audit --omit=dev --audit-level=high]
+  allow_failure: true
+
+.build:
+  stage: build
+  image: docker:27
+  needs: [lint, unit-test, e2e-test]
+  services:
+    - name: docker:27-dind
+      alias: docker
+      command: ["--tls=false", "--insecure-registry=registry.example.com"]
+      variables:
+        HEALTHCHECK_TCP_PORT: "2375"
+  variables:
+    DOCKER_HOST: tcp://docker:2375
+    DOCKER_TLS_CERTDIR: ""
+  before_script:
+    - echo "$CI_REGISTRY_PASSWORD" | docker login --username "$CI_REGISTRY_USER" --password-stdin "$CI_REGISTRY"
+
+build-image:
+  extends: .build
+  script:
+    - docker build --pull -t "$CI_REGISTRY_IMAGE:$CI_COMMIT_SHORT_SHA" -t "$CI_REGISTRY_IMAGE:latest" .
+    - docker push "$CI_REGISTRY_IMAGE:$CI_COMMIT_SHORT_SHA"
+    - docker push "$CI_REGISTRY_IMAGE:latest"
+  rules:
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+
+build-release-image:
+  extends: .build
+  script:
+    - VERSION="${CI_COMMIT_TAG#v}"
+    - docker build --pull -t "$CI_REGISTRY_IMAGE:$VERSION" -t "$CI_REGISTRY_IMAGE:$CI_COMMIT_SHA" -t "$CI_REGISTRY_IMAGE:stable" .
+    - docker push "$CI_REGISTRY_IMAGE:$VERSION"
+    - docker push "$CI_REGISTRY_IMAGE:$CI_COMMIT_SHA"
+    - docker push "$CI_REGISTRY_IMAGE:stable"
+  rules:
+    - if: $CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+$/
+
+deploy-dev:
+  stage: deploy
+  image: alpine/k8s:1.31.1
+  needs: [build-image]
+  resource_group: dev
+  environment:
+    name: dev
+    url: https://wishlink.example.com
+  script:
+    - kubectl create secret docker-registry gitlab-registry
+        --namespace "$KUBE_NAMESPACE"
+        --docker-server "$CI_REGISTRY"
+        --docker-username "${REGISTRY_PULL_USERNAME:-$CI_REGISTRY_USER}"
+        --docker-password "${REGISTRY_PULL_TOKEN:-$CI_REGISTRY_PASSWORD}"
+        --dry-run=client -o yaml | kubectl apply -f -
+    - |
+      # Optional OIDC settings (Keycloak); empty values keep OIDC disabled
+      kubectl create configmap wishlink-oidc --namespace "$KUBE_NAMESPACE" \
+        --from-literal "OIDC_ISSUER=${OIDC_ISSUER:-}" --from-literal "OIDC_CLIENT_ID=${OIDC_CLIENT_ID:-wishlink}" \
+        --dry-run=client -o yaml | kubectl apply -f -
+      kubectl create secret generic wishlink-secrets --namespace "$KUBE_NAMESPACE" \
+        --from-literal "OIDC_CLIENT_SECRET=${OIDC_CLIENT_SECRET:-}" --from-literal "ADMIN_PASSWORD=${ADMIN_PASSWORD:-}" --dry-run=client -o yaml | kubectl apply -f -
+    - cd k8s
+    - kustomize edit set image "wishlink=$CI_REGISTRY_IMAGE:$CI_COMMIT_SHORT_SHA"
+    - kubectl apply -k .
+    - kubectl -n "$KUBE_NAMESPACE" rollout status deployment/wishlink --timeout=180s
+  rules:
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+
+# ---------------------------------------------------------------------------------------------------------
+# Release (tag vX.Y.Z):  tests -> build-release-image -> release-assets -> create-release (GitLab)
+#   -> mirror-github (source) -> release-github-images (ghcr.io) -> release-github (GitHub release + assets)
+# The GitHub jobs run only when GITHUB_MIRROR_URL and GITHUB_MIRROR_TOKEN are set (protected variables, see
+# docs/release.md and scripts/mirror/setup.js). Everything published there is rewritten (MIRROR_REWRITES) and
+# scanned for secrets / MIRROR_FORBIDDEN_PATTERNS first; a hit aborts the job before anything leaves GitLab.
+# ---------------------------------------------------------------------------------------------------------
+.release-rules:
+  rules:
+    - if: $CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+$/
+
+.github-rules:
+  rules:
+    - if: '$GITHUB_MIRROR_URL == null || $GITHUB_MIRROR_TOKEN == null'
+      when: never
+    - !reference [.release-rules, rules]
+
+# Deployment assets: compose file + k8s manifests pinned to the version, CycloneDX SBOM, checksums.
+# Stored in the GitLab package registry (internal image name) and as job artifacts (reused for GitHub).
+release-assets:
+  stage: release
+  image: node:22-alpine
+  rules: !reference [.release-rules, rules]
+  needs: [lint, unit-test, e2e-test]
+  script:
+    - apk add --no-cache curl
+    - VERSION="${CI_COMMIT_TAG#v}"
+    - sh scripts/mirror/build-release-assets.sh . dist "$VERSION" "$CI_REGISTRY_IMAGE"
+    # --package-lock-only: read the lock file (no node_modules needed, dev dependencies are excluded anyway)
+    - npm sbom --package-lock-only --omit=dev --sbom-format=cyclonedx > "dist/wishlink-$VERSION.cdx.json"
+    - (cd dist && sha256sum * > SHA256SUMS)
+    - |
+      base="$CI_API_V4_URL/projects/$CI_PROJECT_ID/packages/generic/wishlink/$VERSION"
+      for f in dist/*; do
+        curl --fail --silent --show-error --header "JOB-TOKEN: $CI_JOB_TOKEN" --upload-file "$f" "$base/$(basename "$f")"
+      done
+  artifacts:
+    paths: [dist/]
+    expire_in: never
+
+create-release:
+  stage: release
+  image: registry.gitlab.com/gitlab-org/release-cli:latest
+  needs: [build-release-image, release-assets]
+  rules: !reference [.release-rules, rules]
+  script:
+    - VERSION="${CI_COMMIT_TAG#v}"
+    - base="$CI_API_V4_URL/projects/$CI_PROJECT_ID/packages/generic/wishlink/$VERSION"
+    - links=""
+    - |
+      for name in docker-compose.yml "wishlink-$VERSION-k8s.tar.gz" "wishlink-$VERSION.cdx.json" SHA256SUMS; do
+        links="$links --assets-link {\"name\":\"$name\",\"url\":\"$base/$name\"}"
+      done
+    - |
+      # shellcheck disable=SC2086
+      release-cli create --name "WishLink $CI_COMMIT_TAG" --tag-name "$CI_COMMIT_TAG" \
+        --description "Docker image: $CI_REGISTRY_IMAGE:$VERSION. Compose file, Kubernetes manifests and the SBOM (CycloneDX) are attached; checksums in SHA256SUMS." \
+        $links
+
+# GitHub source mirror: the GitLab history is never pushed. Each release becomes ONE commit in the GitHub
+# repository, made from the tagged tree (git archive) after rewriting and scanning. LICENSE of the mirror stays.
+mirror-github:
+  stage: release
+  image: node:22-alpine
+  rules: !reference [.github-rules, rules]
+  needs: [create-release]
+  script:
+    - apk add --no-cache git
+    - mkdir snapshot && git archive "$CI_COMMIT_SHA" | tar -x -C snapshot
+    - node scripts/mirror/guard.js prepare snapshot
+    - auth="$(printf 'x-access-token:%s' "$GITHUB_MIRROR_TOKEN" | base64 | tr -d '\n')"
+    - |
+      git -c "http.extraHeader=Authorization: Basic $auth" clone "$GITHUB_MIRROR_URL" mirror
+    - cd mirror
+    - if [ -f LICENSE ] && [ ! -f ../snapshot/LICENSE ]; then cp LICENSE ../snapshot/LICENSE; fi
+    - git rm -rq --ignore-unmatch . && cp -a ../snapshot/. .
+    - git add -A
+    - git -c user.name="WishLink contributors" -c user.email="noreply@invalid" commit --allow-empty -q -m "Release $CI_COMMIT_TAG"
+    - git tag -f "$CI_COMMIT_TAG"
+    - |
+      git -c "http.extraHeader=Authorization: Basic $auth" push origin "HEAD:refs/heads/$(git symbolic-ref --short HEAD)" "+refs/tags/$CI_COMMIT_TAG"
+  artifacts:
+    paths: [snapshot/]
+    expire_in: 1 day
+
+# Copies the released image (same digest, no rebuild) to ghcr.io/<owner>/<repo>. Needs GITHUB_GHCR_TOKEN
+# (classic PAT, write:packages). The application files and the image configuration are scanned first (built-in secret
+# patterns, known secret values, MIRROR_FORBIDDEN_PATTERNS); the third-party node_modules are not scanned.
+# The first push creates the package as private: set it to public once and link it to the repository.
+release-github-images:
+  stage: release
+  image:
+    name: gcr.io/go-containerregistry/crane:debug
+    entrypoint: [""]
+  rules:
+    - if: '$GITHUB_GHCR_TOKEN == null'
+      when: never
+    - !reference [.github-rules, rules]
+  needs: [mirror-github, build-release-image]
+  script:
+    - test -n "$MIRROR_FORBIDDEN_PATTERNS" || { echo "MIRROR_FORBIDDEN_PATTERNS is required"; exit 1; }
+    - slug="${GITHUB_MIRROR_URL#https://github.com/}"; slug="${slug%.git}"; slug="$(echo "$slug" | tr 'A-Z' 'a-z')"
+    - VERSION="${CI_COMMIT_TAG#v}"
+    - src="$CI_REGISTRY_IMAGE:$CI_COMMIT_SHA"
+    - printf '%s' "$CI_REGISTRY_PASSWORD" | crane auth login "$CI_REGISTRY" --username "$CI_REGISTRY_USER" --password-stdin
+    - mkdir rootfs && crane export "$src" - | tar -x -C rootfs --exclude='app/node_modules' 
+    - crane config "$src" > rootfs/.image-config.json
+    - crane manifest "$src" > rootfs/.image-manifest.json
+    - |
+      for v in ADMIN_PASSWORD OIDC_CLIENT_SECRET GITHUB_MIRROR_TOKEN GITHUB_GHCR_TOKEN CI_JOB_TOKEN CI_REGISTRY_PASSWORD REGISTRY_PULL_TOKEN; do
+        eval "val=\${$v:-}"; [ "${#val}" -ge 8 ] && printf '%s\n' "$val"
+      done > literals.txt || true
+    - |
+      fail=0
+      grep -v -e '^#' -e '^$' scripts/mirror/secret-patterns.txt > patterns.txt
+      grep -raEl -f patterns.txt rootfs && fail=1
+      grep -raiEl "$MIRROR_FORBIDDEN_PATTERNS" rootfs && fail=1
+      [ -s literals.txt ] && grep -raFl -f literals.txt rootfs && fail=1
+      rm -f literals.txt patterns.txt
+      [ "$fail" = 0 ] || { echo "Secrets or installation-specific data found in the files above; refusing to publish the image."; exit 1; }
+    - printf '%s' "$GITHUB_GHCR_TOKEN" | crane auth login ghcr.io --username x-access-token --password-stdin
+    - |
+      major="${VERSION%%.*}"; minor="${VERSION%.*}"
+      for tag in "$VERSION" "$minor" "$major" latest "$CI_COMMIT_SHA"; do
+        crane copy "$src" "ghcr.io/$slug:$tag"
+      done
+
+# GitHub release for the tag the mirror pushed. Compose file and k8s manifests are built from the SANITISED snapshot
+# (public image name), the SBOM is rewritten, everything is scanned again by publish-github-release.js.
+release-github:
+  stage: release
+  image: node:22-alpine
+  rules: !reference [.github-rules, rules]
+  needs:
+    - mirror-github
+    - release-assets
+    - job: release-github-images
+      optional: true
+  script:
+    - VERSION="${CI_COMMIT_TAG#v}"
+    - slug="${GITHUB_MIRROR_URL#https://github.com/}"; slug="${slug%.git}"; slug="$(echo "$slug" | tr 'A-Z' 'a-z')"
+    - path="${GITHUB_MIRROR_URL#https://github.com/}"; path="${path%.git}"
+    - notes="Compose file, Kubernetes manifests and the SBOM (CycloneDX). Checksums in SHA256SUMS."
+    - |
+      if [ -n "$GITHUB_GHCR_TOKEN" ]; then notes="Docker image: ghcr.io/$slug:$VERSION. $notes"; fi
+    - sh scripts/mirror/build-release-assets.sh snapshot gh-dist "$VERSION" "ghcr.io/$slug"
+    - cp "dist/wishlink-$VERSION.cdx.json" gh-dist/
+    # The SBOM carries the internal image name and GitLab links; the order matters (specific before general).
+    - |
+      node -e '
+        const fs = require("fs"); const f = process.argv[1];
+        let t = fs.readFileSync(f, "utf8");
+        for (const [a, b] of [[process.env.CI_REGISTRY_IMAGE, "ghcr.io/" + process.argv[2]], [process.env.CI_PROJECT_URL, "https://github.com/" + process.argv[3]]]) t = t.split(a).join(b);
+        fs.writeFileSync(f, t);' "gh-dist/wishlink-$VERSION.cdx.json" "$slug" "$path"
+    - (cd gh-dist && sha256sum * > SHA256SUMS)
+    - node scripts/mirror/publish-github-release.js --tag "$CI_COMMIT_TAG" --name "WishLink $CI_COMMIT_TAG" --notes "$notes" gh-dist/*
