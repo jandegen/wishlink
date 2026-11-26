@@ -79,7 +79,9 @@ published wishes are shown. A visitor without a session is sent to login/registr
 
 ## Authentication
 
-- Registration: username, first name, last name, email, password (≥ 8 chars). Passwords hashed with scrypt + random salt.
+- Registration: username, first name, last name, password (≥ 8 chars). No e-mail address is collected; `users.email` is optional (kept for accounts created earlier
+  and for OIDC users) and the previous `NOT NULL` constraint was removed by a table-rebuild migration (`migrateEmailOptional` in `src/db.js`) that preserves ids, relations and sessions.
+  Without e-mail there is no self-service reset: an admin resets passwords. Passwords hashed with scrypt + random salt.
 - Session: random 256-bit token in an `HttpOnly; SameSite=Lax` cookie (`Secure` when `PUBLIC_URL` is https); only its hash is stored.
 - CSRF: SameSite cookie + `Origin` header must match `Host` for state-changing requests.
 - Brute force: in-memory rate limit on login/register (20/min/IP; per-process, adequate for a single replica).

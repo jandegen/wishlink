@@ -9,6 +9,7 @@
   let lang = DEFAULT_LANG;
   let user = null;
   let oidcEnabled = false;
+  let operator = null; // who runs this instance (config OPERATOR_NAME), shown in the privacy notice
   let pollTimer = null;
   const root = document.getElementById('app');
 
@@ -66,7 +67,7 @@
 
   const fieldKey = (f) => ({
     title: 'wish.title', links: 'wish.links', description: 'wish.description', username: 'auth.username',
-    firstName: 'auth.firstName', lastName: 'auth.lastName', email: 'auth.email', password: 'auth.password',
+    firstName: 'auth.firstName', lastName: 'auth.lastName', password: 'auth.password',
     newPassword: 'account.newPassword',
   }[f] || f);
 
@@ -207,21 +208,28 @@
       },
     },
     isReg ? [field('username', 'auth.username', 'text', { autocomplete: 'username' }),
-      h('div', { class: 'two' }, field('firstName', 'auth.firstName'), field('lastName', 'auth.lastName')),
-      field('email', 'auth.email', 'email', { autocomplete: 'email' }),
+      h('div', { class: 'two' }, field('firstName', 'auth.firstName', 'text', { autocomplete: 'given-name' }),
+        field('lastName', 'auth.lastName', 'text', { autocomplete: 'family-name' })),
       field('password', 'auth.password', 'password', { autocomplete: 'new-password', minlength: 8 })]
-      : [field('login', 'auth.loginOrEmail', 'text', { autocomplete: 'username' }),
+      : [field('login', 'auth.username', 'text', { autocomplete: 'username' }),
         field('password', 'auth.password', 'password', { autocomplete: 'current-password' })],
     err,
-    h('button', { class: 'primary', type: 'submit' }, t(isReg ? 'auth.register' : 'auth.login')));
+    h('button', { class: 'primary', type: 'submit' }, t(isReg ? 'auth.createAccount' : 'auth.login')));
+    // First-time visitors must see at once what to do: a clearly separate "new here" block with its own button.
+    const switchBlock = isReg
+      ? h('div', { class: 'switch-box' }, h('p', {}, t('auth.haveAccountQ')),
+        h('a', { class: 'btn-secondary', href: '#/login', 'data-testid': 'auth-switch' }, t('auth.toLogin')))
+      : h('div', { class: 'switch-box new-here' }, h('strong', {}, t('auth.newHere')), h('p', {}, t('auth.newHereText')),
+        h('a', { class: 'btn-secondary', href: '#/register', 'data-testid': 'auth-switch' }, t('auth.createAccount')));
     layout(null, h('div', { class: 'auth-wrap' }, h('div', { class: 'auth' },
       h('div', { class: 'logo-lg' }, '🎁'),
-      h('h1', {}, t(isReg ? 'auth.register' : 'auth.login')),
+      h('h1', {}, t(isReg ? 'auth.registerTitle' : 'auth.login')),
+      h('p', { class: 'lead' }, t(isReg ? 'auth.registerSub' : 'auth.intro')),
       form,
-      oidcEnabled && [h('div', { class: 'divider' }, '·'),
-        h('a', { href: '/api/auth/oidc/login', 'data-testid': 'oidc-login' }, t('auth.oidc'))],
-      h('p', { class: 'switch' }, h('a', { href: isReg ? '#/login' : '#/register', 'data-testid': 'auth-switch' },
-        t(isReg ? 'auth.haveAccount' : 'auth.noAccount'))))));
+      oidcEnabled && [h('div', { class: 'divider' }, t('auth.or')),
+        h('a', { class: 'btn-secondary', href: '/api/auth/oidc/login', 'data-testid': 'oidc-login' }, t('auth.oidc'))],
+      switchBlock,
+      h('p', { class: 'privacy-note', 'data-testid': 'privacy-note' }, `🔒 ${operator ? t('privacy.notice', { operator }) : t('privacy.noticeGeneric')}`))));
   }
 
   /** Modal to create / edit a wish, with any number of links and live link previews. */
@@ -352,24 +360,31 @@
     layout('users', [
       h('a', { class: 'back', href: '#/users' }, t('others.back')),
       h('div', { class: 'page-head' }, h('div', { class: 'row' }, avatar(owner, 'lg'),
-        h('div', {}, h('h1', {}, t('others.wishesOf', { name: fullName(owner) }))))),
+        h('div', {}, h('h1', {}, t('others.wishesOf', { name: fullName(owner) })),
+          h('span', { class: 'privacy' }, `🔒 ${t('others.privacy', { name: owner.firstName })}`)))),
       wishes.length === 0
         ? h('div', { class: 'empty-state' }, h('div', { class: 'big' }, '🎈'), t('others.noWishes'))
         : h('div', { class: 'grid' }, wishes.map((w) => {
           const mine = w.claims.find((c) => c.userId === user.id);
           const btn = (type) => h('button', {
-            class: mine?.type === type ? 'active' : '', 'data-testid': `claim-${type}`,
-            onclick: async () => { await api('PUT', `/wishes/${w.id}/claim`, { type }); refresh(); },
+            class: mine?.type === type ? 'active' : '', 'data-testid': `claim-${type}`, 'aria-pressed': mine?.type === type ? 'true' : 'false',
+            // clicking the chosen option again takes the choice back
+            onclick: async () => {
+              if (mine?.type === type) await api('DELETE', `/wishes/${w.id}/claim`); else await api('PUT', `/wishes/${w.id}/claim`, { type });
+              refresh();
+            },
           }, t(`claim.${type}`));
           return h('article', { class: 'tile', 'data-testid': 'other-wish' },
             cover(w, [prioPill(w)]),
             wishBody(w),
             h('div', { class: 'foot' },
               h('div', { class: 'claim-bar', role: 'group', 'aria-label': t('claim.title') }, btn('gift'), btn('contribute'), btn('purchased')),
-              mine && h('button', {
-                class: 'ghost small', 'data-testid': 'claim-remove',
-                onclick: async () => { await api('DELETE', `/wishes/${w.id}/claim`); refresh(); },
-              }, t('claim.remove')),
+              mine && h('div', { class: 'my-choice' },
+                h('span', {}, t('claim.yourChoice', { choice: t(`claim.${mine.type}`) })),
+                h('button', {
+                  class: 'small', 'data-testid': 'claim-remove',
+                  onclick: async () => { await api('DELETE', `/wishes/${w.id}/claim`); refresh(); },
+                }, `↩ ${t('claim.remove')}`)),
               w.claims.length === 0
                 ? h('p', { class: 'claimers empty' }, t('claim.none'))
                 : h('ul', { class: 'claimers', 'data-testid': 'claims' }, w.claims.map((c) => h('li', {},
@@ -407,7 +422,7 @@
     err, h('button', { class: 'primary', type: 'submit' }, t('account.changePassword')));
     layout('account', [
       h('div', { class: 'page-head' }, h('div', {}, h('h1', {}, t('account.title')),
-        h('p', { class: 'sub' }, `${fullName(user)} · @${user.username} · ${user.email}`))),
+        h('p', { class: 'sub' }, [fullName(user), `@${user.username}`, user.email].filter(Boolean).join(' · ')))),
       h('div', { class: 'panel' }, h('h3', {}, t('account.changePassword')),
         user.hasPassword ? form : h('p', { class: 'muted' }, t('account.managedExternally'))),
     ]);
@@ -462,7 +477,7 @@
         avatar(u),
         h('div', { class: 'who' },
           h('strong', {}, fullName(u)),
-          h('span', { class: 'muted' }, `@${u.username} · ${u.email}`),
+          h('span', { class: 'muted' }, [`@${u.username}`, u.email].filter(Boolean).join(' · ')),
           h('span', { class: 'tags' },
             u.isAdmin && h('span', { class: 'tag' }, t('admin.tagAdmin')),
             u.oidc && h('span', { class: 'tag' }, 'Keycloak'),
@@ -508,7 +523,7 @@
 
   async function init() {
     await loadLang(initialLang());
-    try { oidcEnabled = (await api('GET', '/auth/config')).oidc; } catch { /* ignore */ }
+    try { const c = await api('GET', '/auth/config'); oidcEnabled = c.oidc; operator = c.operator; } catch { /* ignore */ }
     try { user = (await api('GET', '/auth/me')).user; } catch { user = null; }
     window.addEventListener('hashchange', route);
     route();

@@ -3,17 +3,22 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const { validateRegistration, validateWish, validateClaimType, ValidationError } = require('../../src/validation');
 
-const reg = { username: 'anna', firstName: 'Anna', lastName: 'Muster', email: 'anna@example.com', password: 'secret123' };
+const reg = { username: 'anna', firstName: 'Anna', lastName: 'Muster', password: 'secret123' };
 
 test('registration: accepts valid input', () => {
   assert.equal(validateRegistration(reg).username, 'anna');
+});
+
+test('registration: needs no e-mail address and does not carry one along', () => {
+  const v = validateRegistration({ ...reg, email: 'ignored@example.com' });
+  assert.equal(v.email, undefined);
+  assert.deepEqual(Object.keys(v).sort(), ['firstName', 'lastName', 'password', 'username']);
 });
 
 test('registration: rejects bad input', () => {
   for (const [patch, code] of [
     [{ username: 'ab' }, 'required'],
     [{ username: 'a b c' }, 'invalid_username'],
-    [{ email: 'nope' }, 'invalid_email'],
     [{ password: 'short' }, 'password_too_short'],
     [{ firstName: ' ' }, 'required'],
   ]) {

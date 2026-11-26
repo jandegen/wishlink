@@ -9,6 +9,8 @@ services:
     environment:
       PUBLIC_URL: ${PUBLIC_URL:-http://localhost:3000}
       TRUST_PROXY: ${TRUST_PROXY:-false}
+      # Name shown in the privacy notice on the login page: "your data is stored on <name>'s private server"
+      OPERATOR_NAME: ${OPERATOR_NAME:-}
       # Initial admin account (created on first start when ADMIN_PASSWORD is set)
       ADMIN_USERNAME: ${ADMIN_USERNAME:-admin}
       ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}

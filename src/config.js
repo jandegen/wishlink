@@ -9,6 +9,8 @@ function loadConfig(env = process.env) {
     port: int(env.PORT, 3000),
     databasePath: env.DATABASE_PATH || './data/wishlink.db',
     publicUrl,
+    // Who runs this instance (shown in the privacy notice: "your data is stored on <operator>'s server").
+    operatorName: (env.OPERATOR_NAME || '').trim().slice(0, 80),
     sessionTtlHours: int(env.SESSION_TTL_HOURS, 24 * 14),
     cookieSecure: bool(env.COOKIE_SECURE, publicUrl.startsWith('https://')),
     trustProxy: bool(env.TRUST_PROXY, false),
@@ -17,7 +19,7 @@ function loadConfig(env = process.env) {
     // Initial admin account, created at startup if it does not exist yet (never overwrites an existing user).
     admin: {
       username: env.ADMIN_USERNAME || 'admin',
-      email: env.ADMIN_EMAIL || 'admin@wishlink.local',
+      email: env.ADMIN_EMAIL || '',
       password: env.ADMIN_PASSWORD || '',
     },
     oidc: {

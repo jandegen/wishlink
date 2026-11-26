@@ -111,13 +111,12 @@ function createApp({ db, config, oidcClient, rateLimiter, previewFetcher }) {
   api.get('/health', (req, res) => res.json({ status: 'ok' }));
 
   // ---------- auth ----------
-  api.get('/auth/config', (req, res) => res.json({ oidc: Boolean(oidc) }));
+  api.get('/auth/config', (req, res) => res.json({ oidc: Boolean(oidc), operator: config.operatorName || null }));
 
   api.post('/auth/register', (req, res) => {
     if (!limiter.hit(`reg:${req.ip}`)) throw new HttpError(429, 'too_many_requests');
     const d = validateRegistration(req.body);
     if (repo.usernameTaken(d.username)) throw new HttpError(409, 'username_taken');
-    if (repo.findUserByEmail(d.email)) throw new HttpError(409, 'email_taken');
     const id = repo.createUser({ ...d, passwordHash: hashPassword(d.password) });
     startSession(res, id);
     res.status(201).json({ user: repo.userPublic(repo.getUser(id)) });
@@ -182,9 +181,9 @@ function createApp({ db, config, oidcClient, rateLimiter, previewFetcher }) {
         if (byMail && !byMail.oidc_sub) { repo.linkOidcSub(byMail.id, p.sub); user = byMail; }
       }
       if (!user) {
-        if (!p.email) throw new HttpError(400, 'oidc_email_missing');
-        if (repo.findUserByEmail(p.email)) throw new HttpError(409, 'email_taken');
-        const base = (p.username || p.email.split('@')[0]).replace(/[^A-Za-z0-9_.-]/g, '').slice(0, 28) || 'user';
+        // The IdP may not provide an e-mail; it is optional. An address that already belongs to another account is not stored.
+        const email = p.email && !repo.findUserByEmail(p.email) ? p.email : null;
+        const base = (p.username || (p.email || '').split('@')[0]).replace(/[^A-Za-z0-9_.-]/g, '').slice(0, 28) || 'user';
         let username = base;
         for (let i = 1; repo.usernameTaken(username); i++) username = `${base}${i}`;
         const [first = '', ...rest] = (p.name || '').split(' ');
@@ -192,7 +191,7 @@ function createApp({ db, config, oidcClient, rateLimiter, previewFetcher }) {
           username,
           firstName: p.firstName || first || username,
           lastName: p.lastName || rest.join(' ') || '-',
-          email: p.email,
+          email,
           oidcSub: p.sub,
         });
         user = repo.getUser(id);

@@ -19,12 +19,12 @@ function ensureAdmin(repo, admin, log = console) {
     log.error(`Admin bootstrap skipped: user "${admin.username}" already exists and is not an admin`);
     return 'conflict';
   }
-  if (repo.findUserByEmail(admin.email)) {
+  if (admin.email && repo.findUserByEmail(admin.email)) {
     log.error(`Admin bootstrap skipped: email ${admin.email} is already in use`);
     return 'conflict';
   }
   repo.createUser({
-    username: admin.username, firstName: 'Admin', lastName: 'WishLink', email: admin.email,
+    username: admin.username, firstName: 'Admin', lastName: 'WishLink', email: admin.email || null,
     passwordHash: hashPassword(admin.password), isAdmin: true,
   });
   log.log(`Admin account "${admin.username}" created`);

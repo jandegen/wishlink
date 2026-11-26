@@ -34,8 +34,8 @@ All under `/api`, JSON, cookie session. Errors: `{ "error": "<code>", "field": "
 
 | Method & path | Description |
 |---|---|
-| `POST /auth/register` `{username, firstName, lastName, email, password}` | create account + session |
-| `POST /auth/login` `{login, password}` | login by username or email |
+| `POST /auth/register` `{username, firstName, lastName, password}` | create account + session (no e-mail needed) |
+| `POST /auth/login` `{login, password}` | login by username (accounts created earlier with an e-mail can still use it) |
 | `POST /auth/logout`, `GET /auth/me`, `GET /auth/config` | session / feature flags |
 | `GET /auth/oidc/login`, `GET /auth/oidc/callback` | OIDC flow (when enabled) |
 | `GET /wishes/mine` | own wishes, ordered by priority (**no claim data**) |
@@ -62,6 +62,7 @@ All under `/api`, JSON, cookie session. Errors: `{ "error": "<code>", "field": "
 | `TRUST_PROXY` | `false` | set `true` behind a reverse proxy (correct client IP for rate limiting) |
 | `SESSION_TTL_HOURS` | `336` | session lifetime |
 | `PREVIEW_ALLOW_PRIVATE` | `false` | allow link previews of internal addresses (only for tests / fully trusted setups) |
+| `OPERATOR_NAME` | – | who runs the instance; shown in the privacy notice on the login/registration page (generic text when empty) |
 | `ADMIN_PASSWORD`, `ADMIN_USERNAME` (`admin`), `ADMIN_EMAIL` | – | creates the initial admin at startup (see *Administration*) |
 | `OIDC_ISSUER`, `OIDC_CLIENT_ID`, `OIDC_CLIENT_SECRET` | – | enable OIDC login |
 | `OIDC_REDIRECT_URI`, `OIDC_SCOPE` | `PUBLIC_URL/api/auth/oidc/callback`, `openid profile email` | overrides |
@@ -91,6 +92,25 @@ Pin a version with `WISHLINK_IMAGE=ghcr.io/jandegen/wishlink:1.2.3`. To build th
 Data lives in the named volume `wishlink-data`. Backup: `docker run --rm -v wishlink_wishlink-data:/d -v $PWD:/b alpine tar czf /b/wishlink-backup.tgz -C /d .`
 Update to the newest release: `docker compose pull && docker compose up -d`.
 Behind a TLS reverse proxy set `PUBLIC_URL=https://your.host` and `TRUST_PROXY=true`.
+
+### Behind Traefik
+
+```bash
+cat >> .env <<'ENV'
+WISHLINK_HOST=wishlink.example.com
+TRAEFIK_NETWORK=web            # the external network Traefik is attached to
+ADMIN_PASSWORD=change-me-please
+ENV
+docker compose -f docker-compose.yml -f docker-compose.traefik.yml up -d
+```
+
+`docker-compose.traefik.yml` adds the router/service labels, joins the Traefik network, sets `PUBLIC_URL=https://$WISHLINK_HOST` and
+`TRUST_PROXY=true`, redirects `http://` to `https://` (entrypoint `TRAEFIK_HTTP_ENTRYPOINT`, default `web`) and does not publish port 3000. A plain **"404 page not found"** is Traefik's own answer (WishLink never returns that text)
+and means no router matched. Typical causes: the page was opened with **`http://`** while the router only listens on the HTTPS entrypoint
+(check with `curl -I https://host/` vs `curl -I http://host/`), or, visible in the Traefik log: the container is not attached to the network named in
+`traefik.docker.network` (declaring `networks: web: external: true` is not enough, the service needs `networks: [web]`), the router references a
+middleware that does not exist (`middleware "…@docker" does not exist` drops the whole router), or router/service names are copied from
+another application and collide.
 
 ### Enabling Keycloak (OIDC)
 

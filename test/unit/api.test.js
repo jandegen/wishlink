@@ -31,7 +31,7 @@ async function start(opts = {}) {
   return { base, client, app, close: () => server.close() };
 }
 
-const user = (n) => ({ username: n, firstName: n, lastName: 'Test', email: `${n}@x.io`, password: 'password1' });
+const user = (n) => ({ username: n, firstName: n, lastName: 'Test', password: 'password1' });
 
 test('auth: register, me, logout, login, errors', async (t) => {
   const s = await start(); t.after(s.close);
@@ -42,10 +42,9 @@ test('auth: register, me, logout, login, errors', async (t) => {
   assert.ok(!JSON.stringify((await c('GET', '/api/auth/me')).body).includes('password'));
   assert.equal((await c('POST', '/api/auth/logout')).status, 204);
   assert.equal((await c('GET', '/api/auth/me')).status, 401);
-  assert.equal((await c('POST', '/api/auth/login', { login: 'ANNA@x.io', password: 'password1' })).status, 200);
+  assert.equal((await c('POST', '/api/auth/login', { login: 'ANNA', password: 'password1' })).status, 200); // case-insensitive
   assert.equal((await c('POST', '/api/auth/login', { login: 'anna', password: 'bad' })).status, 401);
   assert.equal((await c('POST', '/api/auth/register', user('anna'))).body.error, 'username_taken');
-  assert.equal((await c('POST', '/api/auth/register', { ...user('xxx1'), email: 'anna@x.io' })).body.error, 'email_taken');
   assert.equal((await c('POST', '/api/auth/register', { ...user('xxx2'), password: '1' })).body.error, 'password_too_short');
 });
 
@@ -159,7 +158,7 @@ test('OIDC flow (mocked provider): creates user, then logs in again', async (t) 
   const me = await fetch(`${s.base}/api/auth/me`, { headers: { cookie: session } }).then((r) => r.json());
   assert.equal(me.user.username, 'kcuser');
   await fetch(`${s.base}/api/auth/oidc/callback?state=st&code=abc`, { redirect: 'manual', headers: { cookie: oidcCookie } });
-  assert.equal(calls.length, 2); // second login re-uses same user (no email_taken error)
+  assert.equal(calls.length, 2); // second login re-uses the same user
 });
 
 test('OIDC disabled by default', async (t) => {
@@ -201,4 +200,45 @@ test('POST /api/preview needs auth and a valid url', async (t) => {
   assert.equal((await c('POST', '/api/preview', { url: 'https://a.b' })).body.preview.title, 'T');
   assert.equal((await c('POST', '/api/preview', { url: 'file:///etc/passwd' })).status, 400);
   assert.equal((await c('POST', '/api/preview', {})).status, 400);
+});
+
+test('registration without e-mail: account has none; accounts created earlier with an e-mail can still log in with it', async (t) => {
+  const s = await start(); t.after(s.close);
+  const c = s.client();
+  const reg = await c('POST', '/api/auth/register', user('newbie'));
+  assert.equal(reg.status, 201);
+  assert.equal(reg.body.user.email, null);
+  await c('POST', '/api/auth/logout');
+  assert.equal((await c('POST', '/api/auth/login', { login: 'newbie', password: 'password1' })).status, 200);
+  // two accounts without e-mail do not collide on the unique column
+  assert.equal((await s.client()('POST', '/api/auth/register', user('newbie2'))).status, 201);
+  // a legacy account (e-mail set) keeps working: login by e-mail, case-insensitive
+  const { hashPassword } = require('../../src/security');
+  s.app.locals.repo.createUser({ username: 'oldtimer', firstName: 'O', lastName: 'T', email: 'Old@Example.com', passwordHash: hashPassword('legacy-pass-1') });
+  const l = await s.client()('POST', '/api/auth/login', { login: 'old@example.com', password: 'legacy-pass-1' });
+  assert.equal(l.status, 200);
+  assert.equal(l.body.user.email, 'Old@Example.com');
+});
+
+test('OIDC: an IdP without e-mail still creates an account (e-mail is optional)', async (t) => {
+  const oidcClient = {
+    async authorizationUrl() { return { url: 'https://kc.example/auth', state: 'st', nonce: 'no' }; },
+    async handleCallback() { return { sub: 'kc-noemail', username: 'mailless', firstName: 'No', lastName: 'Mail' }; },
+  };
+  const s = await start({ oidcClient }); t.after(s.close);
+  const login = await fetch(`${s.base}/api/auth/oidc/login`, { redirect: 'manual' });
+  const oidcCookie = login.headers.getSetCookie()[0].split(';')[0];
+  const cb = await fetch(`${s.base}/api/auth/oidc/callback?state=st&code=abc`, { redirect: 'manual', headers: { cookie: oidcCookie } });
+  assert.equal(cb.status, 302);
+  const session = cb.headers.getSetCookie().find((c) => c.startsWith('wl_session=')).split(';')[0];
+  const me = await fetch(`${s.base}/api/auth/me`, { headers: { cookie: session } }).then((r) => r.json());
+  assert.equal(me.user.username, 'mailless');
+  assert.equal(me.user.email, null);
+});
+
+test('auth config exposes the operator name for the privacy notice (null when not configured)', async (t) => {
+  const s = await start(); t.after(s.close);
+  assert.equal((await s.client()('GET', '/api/auth/config')).body.operator, null);
+  const named = await start({ config: loadConfig({ OPERATOR_NAME: '  Erika Mustermann ' }) }); t.after(named.close);
+  assert.equal((await named.client()('GET', '/api/auth/config')).body.operator, 'Erika Mustermann');
 });

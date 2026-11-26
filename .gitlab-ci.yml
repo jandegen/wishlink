@@ -3,7 +3,8 @@
 # DEV URL: https://wishlink.example.com  (nginx ingress + cert-manager my-cluster-issuer)
 # Runner: homelab k3s runner (tags k3s, docker); deploys with the runner's service account.
 # One-time cluster bootstrap (admin):  kubectl apply -f k8s/bootstrap.yaml
-# CI/CD variables: ADMIN_PASSWORD (masked) = initial password of the account "admin" (created on first start only);
+# CI/CD variables: OPERATOR_NAME = name shown in the privacy notice ("data is stored on <name>'s server");
+# ADMIN_PASSWORD (masked) = initial password of the account "admin" (created on first start only);
 # optional for Keycloak login: OIDC_ISSUER, OIDC_CLIENT_ID, OIDC_CLIENT_SECRET (masked)
 
 stages: [test, build, deploy, release]
@@ -120,6 +121,9 @@ deploy-dev:
       kubectl create configmap wishlink-oidc --namespace "$KUBE_NAMESPACE" \
         --from-literal "OIDC_ISSUER=${OIDC_ISSUER:-}" --from-literal "OIDC_CLIENT_ID=${OIDC_CLIENT_ID:-wishlink}" \
         --dry-run=client -o yaml | kubectl apply -f -
+      # Who runs this instance (shown in the privacy notice on the login page)
+      kubectl create configmap wishlink-instance --namespace "$KUBE_NAMESPACE" \
+        --from-literal "OPERATOR_NAME=${OPERATOR_NAME:-}" --dry-run=client -o yaml | kubectl apply -f -
       kubectl create secret generic wishlink-secrets --namespace "$KUBE_NAMESPACE" \
         --from-literal "OIDC_CLIENT_SECRET=${OIDC_CLIENT_SECRET:-}" --from-literal "ADMIN_PASSWORD=${ADMIN_PASSWORD:-}" --dry-run=client -o yaml | kubectl apply -f -
     - cd k8s

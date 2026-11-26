@@ -9,7 +9,7 @@ CREATE TABLE IF NOT EXISTS users (
   username TEXT NOT NULL UNIQUE COLLATE NOCASE,
   first_name TEXT NOT NULL,
   last_name TEXT NOT NULL,
-  email TEXT NOT NULL UNIQUE COLLATE NOCASE,
+  email TEXT UNIQUE COLLATE NOCASE,
   password_hash TEXT,
   oidc_sub TEXT UNIQUE,
   is_admin INTEGER NOT NULL DEFAULT 0,
@@ -53,6 +53,50 @@ CREATE TABLE IF NOT EXISTS claims (
 );
 `;
 
+const USER_COLUMNS = 'id, username, first_name, last_name, email, password_hash, oidc_sub, is_admin, created_at';
+
+/**
+ * Migration: the e-mail address became optional (registration no longer asks for it). SQLite cannot drop a NOT NULL
+ * constraint, so the table is rebuilt (the documented 12-step procedure): foreign keys are switched off while the old
+ * table is replaced, otherwise dropping it would cascade-delete every wish, claim and session. ids and the AUTOINCREMENT
+ * counter are preserved, existing e-mail addresses stay (they still work as a login name).
+ */
+function migrateEmailOptional(db) {
+  const col = db.prepare('PRAGMA table_info(users)').all().find((c) => c.name === 'email');
+  if (!col || !col.notnull) return;
+  db.exec('PRAGMA foreign_keys = OFF');
+  try {
+    db.exec('BEGIN');
+    const seq = db.prepare("SELECT seq FROM sqlite_sequence WHERE name = 'users'").get();
+    db.exec(`CREATE TABLE users_new (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      username TEXT NOT NULL UNIQUE COLLATE NOCASE,
+      first_name TEXT NOT NULL,
+      last_name TEXT NOT NULL,
+      email TEXT UNIQUE COLLATE NOCASE,
+      password_hash TEXT,
+      oidc_sub TEXT UNIQUE,
+      is_admin INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    )`);
+    db.exec(`INSERT INTO users_new (${USER_COLUMNS}) SELECT ${USER_COLUMNS} FROM users`);
+    db.exec('DROP TABLE users');
+    db.exec('ALTER TABLE users_new RENAME TO users');
+    if (seq) {
+      db.exec("DELETE FROM sqlite_sequence WHERE name = 'users'");
+      db.prepare("INSERT INTO sqlite_sequence (name, seq) VALUES ('users', ?)").run(seq.seq);
+    }
+    const broken = db.prepare('PRAGMA foreign_key_check').all();
+    if (broken.length) throw new Error(`foreign key check failed after users migration (${broken.length} rows)`);
+    db.exec('COMMIT');
+  } catch (e) {
+    db.exec('ROLLBACK');
+    throw e;
+  } finally {
+    db.exec('PRAGMA foreign_keys = ON');
+  }
+}
+
 function openDatabase(file) {
   if (file !== ':memory:') fs.mkdirSync(path.dirname(path.resolve(file)), { recursive: true });
   const db = new DatabaseSync(file);
@@ -62,6 +106,7 @@ function openDatabase(file) {
   if (!db.prepare('PRAGMA table_info(users)').all().some((c) => c.name === 'is_admin')) {
     db.exec('ALTER TABLE users ADD COLUMN is_admin INTEGER NOT NULL DEFAULT 0');
   }
+  migrateEmailOptional(db);
   // Migrate the legacy single `wishes.url` into wish_links (idempotent).
   db.exec(`INSERT INTO wish_links (wish_id, url, position)
            SELECT id, url, 0 FROM wishes WHERE url IS NOT NULL AND url != '';

@@ -9,7 +9,6 @@ async function register(page, name) {
   await page.fill('input[name=username]', name);
   await page.fill('input[name=firstName]', name);
   await page.fill('input[name=lastName]', 'Tester');
-  await page.fill('input[name=email]', `${name}@example.com`);
   await page.fill('input[name=password]', 'password123');
   await page.click('button[type=submit]');
   await expect(page.getByTestId('whoami')).toHaveText(name);
@@ -237,7 +236,6 @@ test.describe('sharing', () => {
     await guest.fill('input[name=username]', guestName);
     await guest.fill('input[name=firstName]', guestName);
     await guest.fill('input[name=lastName]', 'Gast');
-    await guest.fill('input[name=email]', `${guestName}@example.com`);
     await guest.fill('input[name=password]', 'password123');
     await guest.click('button[type=submit]');
     await expect(guest.getByRole('heading', { name: new RegExp(`Wünsche von ${ownerName}`) })).toBeVisible();
@@ -331,5 +329,70 @@ test.describe('administration & account', () => {
     await login(u.page, u.name, 'neues-passwort-1');
     await expect(u.page.getByTestId('whoami')).toHaveText(u.name);
     await u.ctx.close();
+  });
+});
+
+test.describe('first-time visitors and choices', () => {
+  test('login page explains what to do: clear "create account" button, no e-mail, privacy notice with the operator', async ({ page }) => {
+    await page.goto('/');
+    await expect(page.getByText('Zum ersten Mal hier?')).toBeVisible();
+    const create = page.getByTestId('auth-switch');
+    await expect(create).toHaveText('Konto erstellen');
+    await expect(page.locator('.lead')).toContainText('du siehst nie, wer');
+    await expect(page.getByTestId('privacy-note')).toContainText('privaten Server von Max Mustermann');
+    await expect(page.getByTestId('privacy-note')).toContainText('ohne Weitergabe an Dritte');
+
+    await create.click();
+    await expect(page.getByRole('heading', { name: 'Konto erstellen' })).toBeVisible();
+    await expect(page.locator('input[name=email]')).toHaveCount(0);
+    await expect(page.getByText('eine E-Mail-Adresse brauchst du nicht')).toBeVisible();
+    await expect(page.getByTestId('privacy-note')).toContainText('Max Mustermann');
+    await expect(page.getByTestId('auth-switch')).toHaveText('Zur Anmeldung');
+
+    // registering needs exactly: username, first name, last name, password
+    const name = `fv${uid()}`;
+    await page.fill('input[name=username]', name);
+    await page.fill('input[name=firstName]', 'Erst');
+    await page.fill('input[name=lastName]', 'Besucher');
+    await page.fill('input[name=password]', 'password123');
+    await page.getByRole('button', { name: 'Konto erstellen' }).click();
+    await expect(page.getByTestId('whoami')).toHaveText(name);
+  });
+
+  test('privacy notice and sign-up are available in English too', async ({ page }) => {
+    await page.goto('/');
+    await page.getByTestId('lang').selectOption('en');
+    await expect(page.getByText('First time here?')).toBeVisible();
+    await expect(page.getByTestId('auth-switch')).toHaveText('Create account');
+    await expect(page.getByTestId('privacy-note')).toContainText("Max Mustermann's private server");
+  });
+
+  test('a choice is clear and reversible: shown as "Your choice", taken back by the button or by clicking it again', async ({ browser }) => {
+    const owner = await newUser(browser, 'ch');
+    const viewer = await newUser(browser, 'cv');
+    await owner.page.getByTestId('add-wish').click();
+    await owner.page.fill('input[name=title]', 'Wahlwunsch');
+    await owner.page.getByRole('button', { name: 'Speichern' }).click();
+    await owner.page.getByTestId('toggle-publish').click();
+    await expect(owner.page.getByTestId('my-wish')).toContainText('Freigegeben');
+
+    await viewer.page.getByRole('link', { name: 'Wünsche anderer' }).click();
+    await viewer.page.locator('[data-testid=user-card]', { hasText: owner.name }).click();
+    await expect(viewer.page.locator('.privacy')).toContainText('sieht nie, wer sich hier eingetragen hat');
+    await expect(viewer.page.getByTestId('claim-remove')).toHaveCount(0); // nothing chosen yet: no confusing button
+
+    await viewer.page.getByTestId('claim-contribute').click();
+    await expect(viewer.page.locator('.my-choice')).toContainText('Deine Auswahl: Ich beteilige mich');
+    await expect(viewer.page.getByTestId('claim-contribute')).toHaveAttribute('aria-pressed', 'true');
+    await viewer.page.getByRole('button', { name: /Auswahl zurücknehmen/ }).click();
+    await expect(viewer.page.locator('.my-choice')).toHaveCount(0);
+    await expect(viewer.page.getByTestId('claims')).toHaveCount(0);
+
+    await viewer.page.getByTestId('claim-gift').click();            // choose again ...
+    await expect(viewer.page.getByTestId('claims')).toContainText('du (schenkt)');
+    await viewer.page.getByTestId('claim-gift').click();            // ... and take it back by clicking the active choice
+    await expect(viewer.page.getByTestId('claims')).toHaveCount(0);
+    await expect(viewer.page.locator('.my-choice')).toHaveCount(0);
+    await Promise.all([owner, viewer].map((u) => u.ctx.close()));
   });
 });

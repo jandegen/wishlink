@@ -44,14 +44,11 @@ function validateLinks(v) {
 function validateRegistration(b = {}) {
   const username = requireText(b.username, 'username', { min: 3, max: 32 });
   if (!/^[A-Za-z0-9_.-]+$/.test(username)) throw new ValidationError('invalid_username', 'username');
-  const email = requireText(b.email, 'email', { max: 254 });
-  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw new ValidationError('invalid_email', 'email');
   const password = typeof b.password === 'string' ? b.password : '';
   if (password.length < 8) throw new ValidationError('password_too_short', 'password');
   if (password.length > 200) throw new ValidationError('too_long', 'password');
   return {
     username,
-    email,
     password,
     firstName: requireText(b.firstName, 'firstName', { max: 80 }),
     lastName: requireText(b.lastName, 'lastName', { max: 80 }),

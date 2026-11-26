@@ -1,0 +1,44 @@
+# Run WishLink behind an existing Traefik (Docker provider, TLS via ACME):
+#   WISHLINK_HOST=wishlink.example.com docker compose -f docker-compose.yml -f docker-compose.traefik.yml up -d
+#
+# Variables (put them in .env):
+#   WISHLINK_HOST          required – public host name, e.g. wishlink.example.com
+#   TRAEFIK_NETWORK        name of the EXTERNAL Docker network Traefik is attached to (default: web)
+#   TRAEFIK_ENTRYPOINT     HTTPS entrypoint, default: websecure
+#   TRAEFIK_HTTP_ENTRYPOINT  plain-HTTP entrypoint (port 80) that redirects to HTTPS, default: web
+#   TRAEFIK_CERTRESOLVER   default: letsencrypt
+#
+# Common pitfalls this file avoids (all end in Traefik's plain "404 page not found"):
+#   - the service must be attached to Traefik's network (`networks:`), declaring the network alone is not enough
+#   - router/service names must be unique across all compose projects (not "gitlab", not copied from another app)
+#   - a router must not reference a middleware that does not exist
+#   - plain http://host/ answers 404 unless a router on the port-80 entrypoint redirects it (done below; skip it
+#     by removing the wishlink-http labels if your Traefik already redirects http -> https globally)
+services:
+  wishlink:
+    ports: !reset []          # reachable only through Traefik (needs Docker Compose >= 2.24)
+    environment:
+      PUBLIC_URL: https://${WISHLINK_HOST:?set WISHLINK_HOST, e.g. wishlink.example.com}
+      TRUST_PROXY: "true"     # use the real client IP behind the proxy (rate limiting, logs)
+    networks:
+      - proxy
+    labels:
+      - traefik.enable=true
+      - traefik.docker.network=${TRAEFIK_NETWORK:-web}
+      - traefik.http.routers.wishlink.rule=Host(`${WISHLINK_HOST}`)
+      - traefik.http.routers.wishlink.entrypoints=${TRAEFIK_ENTRYPOINT:-websecure}
+      - traefik.http.routers.wishlink.tls.certresolver=${TRAEFIK_CERTRESOLVER:-letsencrypt}
+      - traefik.http.routers.wishlink.service=wishlink
+      - traefik.http.services.wishlink.loadbalancer.server.port=3000
+      # http://host/ -> https://host/ (permanent redirect)
+      - traefik.http.routers.wishlink-http.rule=Host(`${WISHLINK_HOST}`)
+      - traefik.http.routers.wishlink-http.entrypoints=${TRAEFIK_HTTP_ENTRYPOINT:-web}
+      - traefik.http.routers.wishlink-http.middlewares=wishlink-https
+      - traefik.http.routers.wishlink-http.service=wishlink
+      - traefik.http.middlewares.wishlink-https.redirectscheme.scheme=https
+      - traefik.http.middlewares.wishlink-https.redirectscheme.permanent=true
+
+networks:
+  proxy:
+    name: ${TRAEFIK_NETWORK:-web}
+    external: true

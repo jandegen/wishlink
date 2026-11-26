@@ -40,6 +40,7 @@ spec:
             - { name: PUBLIC_URL, valueFrom: { configMapKeyRef: { name: wishlink-config, key: PUBLIC_URL } } }
             - { name: TRUST_PROXY, value: "true" }
             - { name: ADMIN_USERNAME, value: admin }
+            - { name: OPERATOR_NAME, valueFrom: { configMapKeyRef: { name: wishlink-instance, key: OPERATOR_NAME, optional: true } } }
             - { name: ADMIN_PASSWORD, valueFrom: { secretKeyRef: { name: wishlink-secrets, key: ADMIN_PASSWORD, optional: true } } }
             - { name: OIDC_ISSUER, valueFrom: { configMapKeyRef: { name: wishlink-oidc, key: OIDC_ISSUER, optional: true } } }
             - { name: OIDC_CLIENT_ID, valueFrom: { configMapKeyRef: { name: wishlink-oidc, key: OIDC_CLIENT_ID, optional: true } } }

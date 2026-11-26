@@ -11,7 +11,7 @@ function createRepo(db) {
   const q = (sql) => db.prepare(sql);
 
   const userPublic = (u) => u && ({
-    id: u.id, username: u.username, firstName: u.first_name, lastName: u.last_name, email: u.email,
+    id: u.id, username: u.username, firstName: u.first_name, lastName: u.last_name, email: u.email || null,
     isAdmin: Boolean(u.is_admin), hasPassword: Boolean(u.password_hash),
   });
 
@@ -120,8 +120,8 @@ function createRepo(db) {
 
   return {
     // ---- users ----
-    createUser({ username, firstName, lastName, email, passwordHash = null, oidcSub = null, isAdmin = false }) {
-      const r = stmts.insertUser.run(username, firstName, lastName, email, passwordHash, oidcSub, isAdmin ? 1 : 0);
+    createUser({ username, firstName, lastName, email = null, passwordHash = null, oidcSub = null, isAdmin = false }) {
+      const r = stmts.insertUser.run(username, firstName, lastName, email || null, passwordHash, oidcSub, isAdmin ? 1 : 0);
       return Number(r.lastInsertRowid);
     },
     setPassword: (userId, passwordHash) => stmts.setPassword.run(passwordHash, userId).changes > 0,

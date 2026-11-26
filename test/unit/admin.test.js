@@ -29,6 +29,12 @@ test('bootstrap: disabled without password, creates once, never promotes or rese
   assert.equal(repo.findUserByLogin('boss').is_admin, 0);
 });
 
+test('bootstrap: the admin e-mail is optional', () => {
+  const repo = createRepo(openDatabase(':memory:'));
+  assert.equal(ensureAdmin(repo, { username: 'root', email: '', password: 'admin-pass-1' }, quiet), 'created');
+  assert.equal(repo.findUserByLogin('root').email, null);
+});
+
 test('migration adds is_admin to legacy databases', () => {
   const fs = require('node:fs'); const os = require('node:os'); const path = require('node:path');
   const { DatabaseSync } = require('node:sqlite');
@@ -70,7 +76,7 @@ async function start() {
   };
   return { client, repo, close: () => server.close() };
 }
-const reg = (n) => ({ username: n, firstName: n, lastName: 'T', email: `${n}@x.io`, password: 'password1' });
+const reg = (n) => ({ username: n, firstName: n, lastName: 'T', password: 'password1' });
 
 test('admin endpoints: only admins; users list has no wish/claim data', async (t) => {
   const s = await start(); t.after(s.close);
