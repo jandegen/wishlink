@@ -1,0 +1,7 @@
+# Development override: build the image from this checkout instead of using the published release.
+#   docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --build
+services:
+  wishlink:
+    build: .
+    image: wishlink:dev
+    pull_policy: never

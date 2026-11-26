@@ -77,14 +77,19 @@ Docker Compose: set `ADMIN_PASSWORD` in `.env`.
 
 ## Docker Compose deployment
 
+`docker-compose.yml` always runs the **latest published release** (`ghcr.io/jandegen/wishlink:latest`, `pull_policy: always`):
+
 ```bash
-cp .env.example .env     # optional – adjust PUBLIC_URL etc.
-docker compose up -d --build
+cp .env.example .env     # optional – adjust PUBLIC_URL, ADMIN_PASSWORD etc.
+docker compose up -d
 # → http://localhost:3000
 ```
 
+Pin a version with `WISHLINK_IMAGE=ghcr.io/jandegen/wishlink:1.2.3`. To build the image from a checkout instead, add the dev override:
+`docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --build`. (The package on ghcr.io must be public for anonymous pulls.)
+
 Data lives in the named volume `wishlink-data`. Backup: `docker run --rm -v wishlink_wishlink-data:/d -v $PWD:/b alpine tar czf /b/wishlink-backup.tgz -C /d .`
-Update: `docker compose pull && docker compose up -d` (or `--build`).
+Update to the newest release: `docker compose pull && docker compose up -d`.
 Behind a TLS reverse proxy set `PUBLIC_URL=https://your.host` and `TRUST_PROXY=true`.
 
 ### Enabling Keycloak (OIDC)

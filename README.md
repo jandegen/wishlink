@@ -28,7 +28,8 @@ Technologie egal, aber
 Die Anforderungen oben sind umgesetzt (Node.js + SQLite, Vanilla-JS-Frontend, Deutsch/Englisch).
 
 ```bash
-docker compose up -d --build   # → http://localhost:3000
+docker compose up -d           # aktuelles Release von ghcr.io → http://localhost:3000
+docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --build   # aus dem Quellcode bauen
 npm ci && npm run dev          # lokale Entwicklung
 npm test && npm run test:e2e   # Unit-/API- und Browser-E2E-Tests
 ```

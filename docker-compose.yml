@@ -1,7 +1,12 @@
+# WishLink – runs the latest published release:  docker compose up -d   →  http://localhost:3000
+#
+#   Update to the newest release:  docker compose pull && docker compose up -d   (pull_policy: always also pulls on `up`)
+#   Pin a version:                 WISHLINK_IMAGE=ghcr.io/jandegen/wishlink:1.2.3 docker compose up -d
+#   Build from this checkout:      docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --build
 services:
   wishlink:
-    build: .
-    # image: registry.example.com/group/wishlink:latest   # alternative: use a pre-built image
+    image: ${WISHLINK_IMAGE:-ghcr.io/jandegen/wishlink:latest}
+    pull_policy: always
     restart: unless-stopped
     ports:
       - "${WISHLINK_PORT:-3000}:3000"
