@@ -168,8 +168,8 @@
       h('header', { class: 'top' }, h('div', { class: 'bar' },
         h('a', { class: 'brand', href: '#/' }, h('span', { class: 'logo' }, '🎁'), t('app.name')),
         user && h('nav', { class: 'tabs' },
-          h('a', { href: '#/mine', class: active === 'mine' ? 'active' : '' }, t('nav.mine')),
-          h('a', { href: '#/users', class: active === 'users' ? 'active' : '' }, t('nav.others')),
+          !user.isAdmin && h('a', { href: '#/mine', class: active === 'mine' ? 'active' : '' }, t('nav.mine')),
+          !user.isAdmin && h('a', { href: '#/users', class: active === 'users' ? 'active' : '' }, t('nav.others')),
           h('a', { href: '#/account', class: active === 'account' ? 'active' : '', 'data-testid': 'nav-account' }, t('nav.account')),
           user.isAdmin && h('a', { href: '#/admin', class: active === 'admin' ? 'active' : '', 'data-testid': 'nav-admin' }, t('nav.admin'))),
         h('span', { class: 'spacer' }),
@@ -202,7 +202,7 @@
         try {
           const r = await api('POST', isReg ? '/auth/register' : '/auth/login', data);
           user = r.user;
-          location.hash = takeReturn() || '#/mine';
+          location.hash = r.user.isAdmin ? '#/admin' : (takeReturn() || '#/mine');
           route();
         } catch (ex) { err.textContent = errorText(ex); }
       },
@@ -233,7 +233,8 @@
   }
 
   /** Modal to create / edit a wish, with any number of links and live link previews. */
-  function openWishDialog(wish, onDone) {
+  function openWishDialog(wish, onDone, { forUser = null, ideaFor = null } = {}) {
+    // forUser: create an idea for this user; ideaFor: wish is an idea (edit via /ideas). Neither: the own wish.
     const dlg = h('dialog', { 'data-testid': 'wish-dialog' });
     const err = h('div', { class: 'error', role: 'alert' });
     const linkBox = h('div', {});
@@ -283,13 +284,15 @@
           links: fd.getAll('link').map((s) => String(s).trim()).filter(Boolean),
         };
         try {
-          if (wish) await api('PUT', `/wishes/${wish.id}`, body); else await api('POST', '/wishes', body);
+          if (wish) await api('PUT', `${ideaFor ? '/ideas' : '/wishes'}/${wish.id}`, body);
+          else await api('POST', forUser ? `/users/${forUser.id}/ideas` : '/wishes', body);
           dlg.close();
           onDone();
         } catch (ex) { err.textContent = errorText(ex); }
       },
     },
-    h('h2', {}, t(wish ? 'wish.editTitle' : 'wish.newTitle')),
+    h('h2', {}, forUser ? t('idea.newTitle', { name: forUser.firstName }) : t(wish ? (ideaFor ? 'idea.editTitle' : 'wish.editTitle') : 'wish.newTitle')),
+    (forUser || ideaFor) && h('p', { class: 'muted' }, `🤫 ${t('idea.hidden', { name: (forUser || ideaFor).firstName })}`),
     h('label', {}, t('wish.title'), h('input', { name: 'title', required: true, maxlength: 200, value: wish?.title || '', autofocus: true })),
     h('label', {}, t('wish.description'), h('textarea', { name: 'description', rows: 3, maxlength: 5000 }, wish?.description || '')),
     h('label', {}, t('wish.priority'), h('select', { name: 'priority' },
@@ -361,7 +364,10 @@
       h('a', { class: 'back', href: '#/users' }, t('others.back')),
       h('div', { class: 'page-head' }, h('div', { class: 'row' }, avatar(owner, 'lg'),
         h('div', {}, h('h1', {}, t('others.wishesOf', { name: fullName(owner) })),
-          h('span', { class: 'privacy' }, `🔒 ${t('others.privacy', { name: owner.firstName })}`)))),
+          h('span', { class: 'privacy' }, `🔒 ${t('others.privacy', { name: owner.firstName })}`))),
+        h('div', { class: 'head-actions' },
+          h('button', { class: 'primary', 'data-testid': 'add-idea', onclick: () => openWishDialog(null, refresh, { forUser: owner }) },
+            `💡 ${t('idea.add', { name: owner.firstName })}`))),
       wishes.length === 0
         ? h('div', { class: 'empty-state' }, h('div', { class: 'big' }, '🎈'), t('others.noWishes'))
         : h('div', { class: 'grid' }, wishes.map((w) => {
@@ -374,10 +380,18 @@
               refresh();
             },
           }, t(`claim.${type}`));
-          return h('article', { class: 'tile', 'data-testid': 'other-wish' },
-            cover(w, [prioPill(w)]),
+          const idea = w.suggestedBy;
+          const myIdea = idea && idea.id === user.id;
+          return h('article', { class: `tile${idea ? ' idea' : ''}`, 'data-testid': 'other-wish' },
+            cover(w, [prioPill(w), idea && h('span', { class: 'pill idea-pill', 'data-testid': 'idea-badge' }, `💡 ${(myIdea ? t('idea.byYou') : t('idea.by', { name: fullName(idea) }))}`)]),
             wishBody(w),
             h('div', { class: 'foot' },
+              myIdea && h('div', { class: 'row owner-actions' },
+                h('button', { class: 'ghost small', 'data-testid': 'edit-idea', onclick: () => openWishDialog(w, refresh, { ideaFor: owner }) }, t('wish.edit')),
+                h('button', {
+                  class: 'ghost small danger', 'data-testid': 'delete-idea',
+                  onclick: async () => { if (confirm(t('wish.deleteConfirm'))) { await api('DELETE', `/ideas/${w.id}`); refresh(); } },
+                }, t('wish.delete'))),
               h('div', { class: 'claim-bar', role: 'group', 'aria-label': t('claim.title') }, btn('gift'), btn('contribute'), btn('purchased')),
               mine && h('div', { class: 'my-choice' },
                 h('span', {}, t('claim.yourChoice', { choice: t(`claim.${mine.type}`) })),
@@ -420,9 +434,28 @@
     h('label', {}, t('account.newPassword'), h('input', { name: 'newPassword', type: 'password', required: true, minlength: 8, autocomplete: 'new-password' })),
     h('label', {}, t('account.repeatPassword'), h('input', { name: 'repeat', type: 'password', required: true, minlength: 8, autocomplete: 'new-password' })),
     err, h('button', { class: 'primary', type: 'submit' }, t('account.changePassword')));
+    const nameErr = h('div', { class: 'error', role: 'alert', 'data-testid': 'name-error' });
+    const nameForm = h('form', {
+      'data-testid': 'name-form',
+      onsubmit: async (e) => {
+        e.preventDefault();
+        nameErr.textContent = '';
+        const d = Object.fromEntries(new FormData(nameForm));
+        try {
+          user = (await api('PUT', '/auth/profile', { firstName: d.firstName, lastName: d.lastName })).user;
+          toast(t('account.nameChanged'));
+          accountView();
+        } catch (ex) { nameErr.textContent = errorText(ex); }
+      },
+    },
+    h('div', { class: 'two' },
+      h('label', {}, t('auth.firstName'), h('input', { name: 'firstName', required: true, maxlength: 80, value: user.firstName, autocomplete: 'given-name' })),
+      h('label', {}, t('auth.lastName'), h('input', { name: 'lastName', required: true, maxlength: 80, value: user.lastName, autocomplete: 'family-name' }))),
+    nameErr, h('button', { class: 'primary', type: 'submit' }, t('account.saveName')));
     layout('account', [
       h('div', { class: 'page-head' }, h('div', {}, h('h1', {}, t('account.title')),
         h('p', { class: 'sub' }, [fullName(user), `@${user.username}`, user.email].filter(Boolean).join(' · ')))),
+      h('div', { class: 'panel' }, h('h3', {}, t('account.changeName')), nameForm),
       h('div', { class: 'panel' }, h('h3', {}, t('account.changePassword')),
         user.hasPassword ? form : h('p', { class: 'muted' }, t('account.managedExternally'))),
     ]);
@@ -480,8 +513,7 @@
           h('span', { class: 'muted' }, [`@${u.username}`, u.email].filter(Boolean).join(' · ')),
           h('span', { class: 'tags' },
             u.isAdmin && h('span', { class: 'tag' }, t('admin.tagAdmin')),
-            u.oidc && h('span', { class: 'tag' }, 'Keycloak'),
-            h('span', { class: 'tag' }, t(u.wishCount === 1 ? 'others.count.one' : 'others.count', { count: u.wishCount })))),
+            u.oidc && h('span', { class: 'tag' }, 'Keycloak'))),
         u.id === user.id ? h('span', { class: 'muted' }, t('admin.you')) : h('div', { class: 'row actions' },
           h('button', { class: 'small', 'data-testid': 'reset-password-btn', onclick: () => openResetDialog(u, refresh) }, t('admin.resetPassword')),
           h('button', {
@@ -509,6 +541,7 @@
         const back = takeReturn(); // e.g. after an OIDC round trip
         if (back) { location.hash = back; return; }
       }
+      if (user.isAdmin && !['#/account', '#/admin'].includes(hash)) { location.replace('#/admin'); return; } // admins have no wishes
       const m = hash.match(/^#\/users\/(\d+)$/);
       if (m) return await userWishesView(m[1]);
       if (hash === '#/users') return await usersView();

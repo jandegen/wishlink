@@ -88,6 +88,7 @@ test('migration (e-mail optional): every user, session, wish, link and claim sur
 
   // the application layer still works on the migrated data
   const repo = createRepo(db);
+  db.exec('UPDATE users SET is_admin = 0 WHERE id = 1'); // (admins have no visible wishes)
   assert.equal(repo.findUserByLogin('jan@example.com').id, 1);          // legacy login by e-mail (case-insensitive)
   assert.equal(repo.findUserByLogin('TEST').id, 2);                       // and by username
   assert.equal(repo.getSessionUser('hash1', 1).username, 'jan');

@@ -46,6 +46,8 @@ All under `/api`, JSON, cookie session. Errors: `{ "error": "<code>", "field": "
 | `GET /users` | other users with ≥1 published wish |
 | `GET /users/:id/wishes` | their published wishes **with claims** (404 for yourself) |
 | `PUT /wishes/:id/claim` `{type: gift\|contribute\|purchased}` / `DELETE` | set / remove own mark |
+| `PUT /auth/profile` `{firstName, lastName}` | change own first / last name |
+| `POST /users/:id/ideas` / `PUT`, `DELETE /ideas/:id` | add an **idea** for another user (hidden from that user, visible to everyone else); only the suggester edits / deletes it |
 | `POST /auth/password` `{currentPassword, newPassword}` | change own password (other sessions are signed out) |
 | `GET /admin/users` | **admin** – all accounts (no wishes, no claims) |
 | `POST /admin/users/:id/password` `{password?}` | **admin** – reset password; empty = generated and returned once; user is signed out everywhere |
@@ -72,7 +74,7 @@ All under `/api`, JSON, cookie session. Errors: `{ "error": "<code>", "field": "
 An admin account is created at startup when `ADMIN_PASSWORD` is set (username `ADMIN_USERNAME`, default `admin`). It is only ever
 *created*: an existing user with that name is never promoted and the password is never reset on later starts – change it on the
 **Konto** page. The **Admin** tab lists all accounts and offers *reset password* (own choice or generated, shown once) and
-*delete* (removes the user's wishes and claims). The admin tooling exposes no wish contents or claims.
+*delete* (removes the user's wishes and claims). The admin tooling exposes no wish contents, claims or wish counts. Admins have no wishes of their own and cannot see anyone's: all wish endpoints answer `403 admin_no_wishes`, and the UI only shows *Konto* and *Admin*.
 In the pipeline the initial password comes from the masked CI/CD variable `ADMIN_PASSWORD`.
 Docker Compose: set `ADMIN_PASSWORD` in `.env`.
 

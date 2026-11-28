@@ -66,10 +66,14 @@ function validateWish(b = {}) {
   };
 }
 
+function validateName(b = {}) {
+  return { firstName: requireText(b.firstName, 'firstName', { max: 80 }), lastName: requireText(b.lastName, 'lastName', { max: 80 }) };
+}
+
 const CLAIM_TYPES = ['gift', 'contribute', 'purchased'];
 function validateClaimType(v) {
   if (!CLAIM_TYPES.includes(v)) throw new ValidationError('invalid_claim_type', 'type');
   return v;
 }
 
-module.exports = { MAX_LINKS, validateLinks, optionalUrl, ValidationError, validateRegistration, validateWish, validateClaimType, CLAIM_TYPES };
+module.exports = { MAX_LINKS, validateLinks, optionalUrl, ValidationError, validateRegistration, validateName, validateWish, validateClaimType, CLAIM_TYPES };

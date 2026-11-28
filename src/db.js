@@ -107,6 +107,11 @@ function openDatabase(file) {
     db.exec('ALTER TABLE users ADD COLUMN is_admin INTEGER NOT NULL DEFAULT 0');
   }
   migrateEmailOptional(db);
+  // Migration: ideas. A wish with `suggested_by` set is an idea someone else added FOR the owner (owner_id);
+  // the owner never sees it. (Deleting the suggester removes their ideas.)
+  if (!db.prepare('PRAGMA table_info(wishes)').all().some((c) => c.name === 'suggested_by')) {
+    db.exec('ALTER TABLE wishes ADD COLUMN suggested_by INTEGER REFERENCES users(id) ON DELETE CASCADE');
+  }
   // Migrate the legacy single `wishes.url` into wish_links (idempotent).
   db.exec(`INSERT INTO wish_links (wish_id, url, position)
            SELECT id, url, 0 FROM wishes WHERE url IS NOT NULL AND url != '';

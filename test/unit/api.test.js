@@ -78,12 +78,12 @@ test('privacy: owner never sees claims; others do', async (t) => {
   const w = (await owner('POST', '/api/wishes', { title: 'Bike', description: 'red', links: ['https://x.io'], priority: 1 })).body.wish;
   assert.equal(w.published, false);
   // draft is invisible and not claimable
-  assert.deepEqual((await bob('GET', '/api/users')).body.users, []);
+  assert.equal((await bob('GET', '/api/users')).body.users.find((u) => u.id === ownerId).wishCount, 0);
   assert.deepEqual((await bob('GET', `/api/users/${ownerId}/wishes`)).body.wishes, []);
   assert.equal((await bob('PUT', `/api/wishes/${w.id}/claim`, { type: 'gift' })).status, 404);
 
   await owner('PUT', `/api/wishes/${w.id}/published`, { published: true });
-  assert.equal((await bob('GET', '/api/users')).body.users[0].wishCount, 1);
+  assert.equal((await bob('GET', '/api/users')).body.users.find((u) => u.id === ownerId).wishCount, 1);
   assert.equal((await bob('PUT', `/api/wishes/${w.id}/claim`, { type: 'gift' })).status, 204);
   assert.equal((await carol('PUT', `/api/wishes/${w.id}/claim`, { type: 'contribute' })).status, 204);
   assert.equal((await bob('PUT', `/api/wishes/${w.id}/claim`, { type: 'bogus' })).status, 400);
@@ -96,7 +96,7 @@ test('privacy: owner never sees claims; others do', async (t) => {
   assert.ok(!/claim|bob|carol|gift|contribute/i.test(JSON.stringify(mine.body)));
   assert.equal((await owner('GET', `/api/users/${ownerId}/wishes`)).status, 404);
   assert.equal((await owner('PUT', `/api/wishes/${w.id}/claim`, { type: 'gift' })).status, 404);
-  assert.equal((await owner('GET', '/api/users')).body.users.length, 0);
+  assert.ok(!(await owner('GET', '/api/users')).body.users.some((u) => u.id === ownerId)); // never lists themself
   const upd = await owner('PUT', `/api/wishes/${w.id}`, { title: 'Bike 2', priority: 3 });
   assert.ok(!/claim|bob|carol/i.test(JSON.stringify(upd.body)));
 

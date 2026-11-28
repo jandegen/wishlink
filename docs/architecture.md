@@ -47,6 +47,13 @@ Enforced in layers:
 
 Other users see, per wish, a list of claimers with name and type (gift / contribute / purchased); a user holds at most one claim per wish and can change or remove it.
 
+## Ideas
+
+An idea is a row in `wishes` with `suggested_by` set (`owner_id` = the person it is for, `published` = 1). Every owner-side query and
+mutation (`listOwnWishes`, `getOwnWish`, update / publish / delete, link lookup) filters `suggested_by IS NULL`, so the person concerned can
+neither see nor modify, claim or delete it. Other users get it from `listWishesForViewer` together with `suggestedBy`; only the suggester can
+edit or delete it (`/api/ideas/:id`). Deleting the suggester removes the idea (`ON DELETE CASCADE`).
+
 ## Administration
 
 `users.is_admin` marks admins. The initial admin is created at startup from `ADMIN_*` variables (never promotes an existing user – otherwise

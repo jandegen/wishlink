@@ -55,7 +55,7 @@ test('unpublishing hides wish; only owner may modify/delete', () => {
   assert.equal(repo.deleteWish(id, bob), false);
   repo.setPublished(id, owner, true);
   repo.setPublished(id, owner, false);
-  assert.deepEqual(repo.listOwnersWithPublished(bob), []);
+  assert.equal(repo.listWishesForViewer(owner, bob).wishes.length, 0);
   assert.equal(repo.deleteWish(id, owner), true);
 });
 

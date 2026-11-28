@@ -5,7 +5,7 @@ const { createRepo } = require('./repo');
 const { createOidcClient } = require('./oidc');
 const { fetchPreview: defaultFetchPreview } = require('./preview');
 const { hashPassword, verifyPassword, generatePassword, newToken, sha256, createRateLimiter } = require('./security');
-const { ValidationError, validateRegistration, validateWish, validateClaimType, optionalUrl } = require('./validation');
+const { ValidationError, validateRegistration, validateName, validateWish, validateClaimType, optionalUrl } = require('./validation');
 
 const COOKIE = 'wl_session';
 const OIDC_COOKIE = 'wl_oidc';
@@ -99,6 +99,11 @@ function createApp({ db, config, oidcClient, rateLimiter, previewFetcher }) {
     if (!req.user) return next(new HttpError(401, 'unauthenticated'));
     return req.user.is_admin ? next() : next(new HttpError(403, 'forbidden'));
   };
+  // Administrators manage accounts only: they have no wishes and cannot see anyone else's.
+  const requireMember = (req, res, next) => {
+    if (!req.user) return next(new HttpError(401, 'unauthenticated'));
+    return req.user.is_admin ? next(new HttpError(403, 'admin_no_wishes')) : next();
+  };
   const idParam = (req) => {
     const id = Number(req.params.id);
     if (!Number.isInteger(id) || id < 1) throw new HttpError(404, 'not_found');
@@ -156,6 +161,13 @@ function createApp({ db, config, oidcClient, rateLimiter, previewFetcher }) {
     res.status(204).end();
   });
 
+  // Change own first / last name.
+  api.put('/auth/profile', requireAuth, (req, res) => {
+    const { firstName, lastName } = validateName(req.body);
+    repo.setName(req.user.id, firstName, lastName);
+    res.json({ user: repo.userPublic(repo.getUser(req.user.id)) });
+  });
+
   api.get('/auth/me', requireAuth, (req, res) => res.json({ user: repo.userPublic(req.user) }));
 
   api.get('/auth/oidc/login', async (req, res, next) => {
@@ -203,15 +215,15 @@ function createApp({ db, config, oidcClient, rateLimiter, previewFetcher }) {
   });
 
   // ---------- owner: own wishes (never include claim data) ----------
-  api.get('/wishes/mine', requireAuth, (req, res) => res.json({ wishes: repo.listOwnWishes(req.user.id) }));
+  api.get('/wishes/mine', requireMember, (req, res) => res.json({ wishes: repo.listOwnWishes(req.user.id) }));
 
-  api.post('/wishes', requireAuth, (req, res) => {
+  api.post('/wishes', requireMember, (req, res) => {
     const { id, pendingLinks } = repo.createWish(req.user.id, validateWish(req.body));
     previews.schedule(pendingLinks);
     res.status(201).json({ wish: repo.getOwnWish(id, req.user.id) });
   });
 
-  api.put('/wishes/:id', requireAuth, (req, res) => {
+  api.put('/wishes/:id', requireMember, (req, res) => {
     const id = idParam(req);
     const pending = repo.updateWish(id, req.user.id, validateWish(req.body));
     if (!pending) throw new HttpError(404, 'not_found');
@@ -219,20 +231,20 @@ function createApp({ db, config, oidcClient, rateLimiter, previewFetcher }) {
     res.json({ wish: repo.getOwnWish(id, req.user.id) });
   });
 
-  api.put('/wishes/:id/published', requireAuth, (req, res) => {
+  api.put('/wishes/:id/published', requireMember, (req, res) => {
     const id = idParam(req);
     if (typeof req.body?.published !== 'boolean') throw new HttpError(400, 'required');
     if (!repo.setPublished(id, req.user.id, req.body.published)) throw new HttpError(404, 'not_found');
     res.json({ wish: repo.getOwnWish(id, req.user.id) });
   });
 
-  api.delete('/wishes/:id', requireAuth, (req, res) => {
+  api.delete('/wishes/:id', requireMember, (req, res) => {
     if (!repo.deleteWish(idParam(req), req.user.id)) throw new HttpError(404, 'not_found');
     res.status(204).end();
   });
 
   // Live preview for the link input in the wish form (own session only, rate limited).
-  api.post('/preview', requireAuth, async (req, res, next) => {
+  api.post('/preview', requireMember, async (req, res, next) => {
     try {
       if (!previewLimiter.hit(`prev:${req.user.id}`)) throw new HttpError(429, 'too_many_requests');
       const url = optionalUrl(req.body?.url);
@@ -242,22 +254,43 @@ function createApp({ db, config, oidcClient, rateLimiter, previewFetcher }) {
   });
 
   // ---------- other users' wishes ----------
-  api.get('/users', requireAuth, (req, res) => res.json({ users: repo.listOwnersWithPublished(req.user.id) }));
+  api.get('/users', requireMember, (req, res) => res.json({ users: repo.listOwnersWithPublished(req.user.id) }));
 
-  api.get('/users/:id/wishes', requireAuth, (req, res) => {
+  api.get('/users/:id/wishes', requireMember, (req, res) => {
     const data = repo.listWishesForViewer(idParam(req), req.user.id);
     if (!data) throw new HttpError(404, 'not_found');
     res.json(data);
   });
 
-  api.put('/wishes/:id/claim', requireAuth, (req, res) => {
+  // ---------- ideas: wishes added by someone else for a user; never visible to that user ----------
+  api.post('/users/:id/ideas', requireMember, (req, res) => {
+    const created = repo.createIdea(idParam(req), req.user.id, validateWish(req.body));
+    if (!created) throw new HttpError(404, 'not_found');
+    previews.schedule(created.pendingLinks);
+    res.status(201).json({ wish: repo.getIdea(created.id, req.user.id) });
+  });
+
+  api.put('/ideas/:id', requireMember, (req, res) => {
+    const id = idParam(req);
+    const pending = repo.updateIdea(id, req.user.id, validateWish(req.body));
+    if (!pending) throw new HttpError(404, 'not_found');
+    previews.schedule(pending);
+    res.json({ wish: repo.getIdea(id, req.user.id) });
+  });
+
+  api.delete('/ideas/:id', requireMember, (req, res) => {
+    if (!repo.deleteIdea(idParam(req), req.user.id)) throw new HttpError(404, 'not_found');
+    res.status(204).end();
+  });
+
+  api.put('/wishes/:id/claim', requireMember, (req, res) => {
     const id = idParam(req);
     const type = validateClaimType(req.body?.type);
     if (repo.setClaim(id, req.user.id, type) === 'not_found') throw new HttpError(404, 'not_found');
     res.status(204).end();
   });
 
-  api.delete('/wishes/:id/claim', requireAuth, (req, res) => {
+  api.delete('/wishes/:id/claim', requireMember, (req, res) => {
     if (repo.removeClaim(idParam(req), req.user.id) === 'not_found') throw new HttpError(404, 'not_found');
     res.status(204).end();
   });

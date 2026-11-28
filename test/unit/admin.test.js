@@ -117,9 +117,10 @@ test('admin resets passwords (given or generated) and signs the user out', async
 
 test('admin deletes users incl. their wishes and claims, but not themself', async (t) => {
   const s = await start(); t.after(s.close);
-  const [admin, bob, carol] = [s.client(), s.client(), s.client()];
+  const [admin, bob, carol, dave] = [s.client(), s.client(), s.client(), s.client()];
   const bobId = (await bob('POST', '/api/auth/register', reg('bobby'))).body.user.id;
   const carolId = (await carol('POST', '/api/auth/register', reg('carol'))).body.user.id;
+  const daveId = (await dave('POST', '/api/auth/register', reg('davey'))).body.user.id;
   const wish = (await bob('POST', '/api/wishes', { title: 'W' })).body.wish;
   await bob('PUT', `/api/wishes/${wish.id}/published`, { published: true });
   await carol('PUT', `/api/wishes/${wish.id}/claim`, { type: 'gift' });
@@ -131,14 +132,14 @@ test('admin deletes users incl. their wishes and claims, but not themself', asyn
   assert.equal((await admin('DELETE', `/api/admin/users/${bobId}`)).status, 204);
   assert.equal((await bob('GET', '/api/auth/me')).status, 401);
   assert.equal((await carol('GET', `/api/users/${bobId}/wishes`)).status, 404);
-  assert.deepEqual((await carol('GET', '/api/users')).body.users, []);
+  assert.ok(!(await carol('GET', '/api/users')).body.users.some((u) => u.id === bobId));
   // deleting the claimer removes the claim only
-  const w2 = (await admin('POST', '/api/wishes', { title: 'A' })).body.wish;
-  await admin('PUT', `/api/wishes/${w2.id}/published`, { published: true });
+  const w2 = (await dave('POST', '/api/wishes', { title: 'A' })).body.wish;
+  await dave('PUT', `/api/wishes/${w2.id}/published`, { published: true });
   await carol('PUT', `/api/wishes/${w2.id}/claim`, { type: 'gift' });
   assert.equal((await admin('DELETE', `/api/admin/users/${carolId}`)).status, 204);
-  assert.deepEqual(s.repo.listWishesForViewer(adminId, 9999).wishes[0].claims, []); // carol's claim was removed with her
-  assert.equal(s.repo.getOwnWish(w2.id, adminId).title, 'A');
+  assert.deepEqual(s.repo.listWishesForViewer(daveId, 9999).wishes[0].claims, []); // carol's claim was removed with her
+  assert.equal(s.repo.getOwnWish(w2.id, daveId).title, 'A');
 });
 
 test('change own password: needs current password, signs out other sessions', async (t) => {

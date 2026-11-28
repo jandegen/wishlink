@@ -14,6 +14,8 @@ async function register(page, name) {
   await expect(page.getByTestId('whoami')).toHaveText(name);
 }
 
+const card = (page, name) => page.locator('[data-testid=user-card]', { hasText: name });
+
 async function newUser(browser, prefix) {
   const ctx = await browser.newContext({ locale: 'de-DE' });
   const page = await ctx.newPage();
@@ -64,13 +66,13 @@ test('full flow: owner publishes wish, others claim, owner sees nothing', async 
 
   // Draft invisible to others
   await bob.page.getByRole('link', { name: 'Wünsche anderer' }).click();
-  await expect(bob.page.getByTestId('user-card')).toHaveCount(0);
+  await expect(card(bob.page, owner.name)).toContainText('0 Wünsche'); // draft: listed, but nothing visible
 
   // Publish -> visible
   await owner.page.getByTestId('toggle-publish').click();
   await expect(mine).toContainText('Freigegeben');
   await bob.page.reload();
-  await bob.page.getByTestId('user-card').click();
+  await card(bob.page, owner.name).click();
   const wish = bob.page.getByTestId('other-wish');
   await expect(wish).toContainText('Fahrrad');
   await expect(wish).toContainText('Hoch');
@@ -81,7 +83,7 @@ test('full flow: owner publishes wish, others claim, owner sees nothing', async 
   await bob.page.getByTestId('claim-gift').click();
   await expect(bob.page.getByTestId('claims')).toContainText('du (schenkt)');
   await carol.page.getByRole('link', { name: 'Wünsche anderer' }).click();
-  await carol.page.getByTestId('user-card').click();
+  await card(carol.page, owner.name).click();
   await expect(carol.page.getByTestId('claims')).toContainText(`${bob.name} Tester (schenkt)`);
   await carol.page.getByTestId('claim-contribute').click();
   await expect(carol.page.getByTestId('claims')).toContainText('du (beteiligt sich)');
@@ -97,7 +99,7 @@ test('full flow: owner publishes wish, others claim, owner sees nothing', async 
     expect(requests.join('\n')).not.toContain(s);
   }
   await owner.page.goto('/#/users');
-  await expect(owner.page.getByTestId('user-card')).toHaveCount(0);
+  await expect(card(owner.page, owner.name)).toHaveCount(0); // never lists themself
 
   // Bob removes his mark
   await bob.page.getByTestId('claim-remove').click();
@@ -108,7 +110,7 @@ test('full flow: owner publishes wish, others claim, owner sees nothing', async 
   await owner.page.getByTestId('toggle-publish').click();
   await carol.page.reload();
   await carol.page.goto('/#/users');
-  await expect(carol.page.getByTestId('user-card')).toHaveCount(0);
+  await expect(card(carol.page, owner.name)).toContainText('0 Wünsche');
 
   await Promise.all([owner, bob, carol].map((u) => u.ctx.close()));
 });
@@ -182,7 +184,7 @@ test.describe('mobile (360px)', () => {
 
     await viewer.page.getByRole('link', { name: 'Wünsche anderer' }).click();
     await noOverflow(viewer.page, 'users');
-    await viewer.page.getByTestId('user-card').click();
+    await card(viewer.page, owner.name).click();
     await expect(viewer.page.getByTestId('other-wish')).toBeVisible();
     await noOverflow(viewer.page, 'user wishes');
     for (const type of ['gift', 'contribute', 'purchased']) {
@@ -314,6 +316,31 @@ test.describe('administration & account', () => {
     await Promise.all([userCtx.close(), adminCtx.close()]);
   });
 
+  test('user changes first and last name; admin has no wishes', async ({ browser }) => {
+    const u = await newUser(browser, 'nm');
+    await u.page.getByTestId('nav-account').click();
+    await u.page.fill('input[name=firstName]', 'Erika');
+    await u.page.fill('input[name=lastName]', 'Musterfrau');
+    await u.page.getByRole('button', { name: 'Namen speichern' }).click();
+    await expect(u.page.getByTestId('toast')).toContainText('Name geändert');
+    await expect(u.page.locator('.sub')).toContainText('Erika Musterfrau');
+    await u.page.reload();
+    await expect(u.page.locator('input[name=firstName]')).toHaveValue('Erika');
+    await u.ctx.close();
+
+    const adminCtx = await browser.newContext({ locale: 'de-DE' });
+    const admin = await adminCtx.newPage();
+    await login(admin, 'admin', 'admin-e2e-pass1');
+    await expect(admin).toHaveURL(/#\/admin$/);
+    await expect(admin.getByRole('link', { name: 'Meine Wünsche' })).toHaveCount(0);
+    await expect(admin.getByRole('link', { name: 'Wünsche anderer' })).toHaveCount(0);
+    await admin.goto('/#/mine');
+    await expect(admin).toHaveURL(/#\/admin$/);
+    expect((await admin.request.get('/api/wishes/mine')).status()).toBe(403);
+    expect((await admin.request.get('/api/users')).status()).toBe(403);
+    await adminCtx.close();
+  });
+
   test('user changes own password on the account page', async ({ browser }) => {
     const u = await newUser(browser, 'pw');
     await u.page.getByTestId('nav-account').click();
@@ -330,6 +357,48 @@ test.describe('administration & account', () => {
     await expect(u.page.getByTestId('whoami')).toHaveText(u.name);
     await u.ctx.close();
   });
+});
+
+test('ideas: users add ideas for others; the person concerned never sees them', async ({ browser }) => {
+  const owner = await newUser(browser, 'io');
+  const bob = await newUser(browser, 'ib');
+  const carol = await newUser(browser, 'ic');
+
+  await bob.page.goto('/#/users');
+  await card(bob.page, owner.name).click();
+  await bob.page.getByTestId('add-idea').click();
+  await expect(bob.page.getByTestId('wish-dialog')).toContainText('sieht diese Idee nie');
+  await bob.page.fill('input[name=title]', 'Geheime Gartenschere');
+  await bob.page.getByRole('button', { name: 'Speichern' }).click();
+  await expect(bob.page.getByTestId('idea-badge')).toContainText('Idee von dir');
+
+  // carol sees it with the suggester and can claim it
+  await carol.page.goto('/#/users');
+  await card(carol.page, owner.name).click();
+  await expect(carol.page.getByTestId('other-wish')).toContainText('Geheime Gartenschere');
+  await expect(carol.page.getByTestId('idea-badge')).toContainText(`Idee von ${bob.name} Tester`);
+  await expect(carol.page.getByTestId('edit-idea')).toHaveCount(0); // only the suggester edits
+  await carol.page.getByTestId('claim-gift').click();
+  await expect(carol.page.getByTestId('claims')).toContainText('du (schenkt)');
+
+  // the owner: nothing, neither in the UI nor in API responses
+  const seen = [];
+  owner.page.on('response', async (r) => { if (r.url().includes('/api/')) seen.push(await r.text().catch(() => '')); });
+  await owner.page.goto('/#/mine');
+  await owner.page.reload();
+  await expect(owner.page.getByTestId('my-wish')).toHaveCount(0);
+  expect((await owner.page.content()) + seen.join('\n')).not.toContain('Gartenschere');
+
+  // the suggester edits and deletes the idea
+  await bob.page.reload();
+  await bob.page.getByTestId('edit-idea').click();
+  await bob.page.fill('input[name=title]', 'Geheime Heckenschere');
+  await bob.page.getByRole('button', { name: 'Speichern' }).click();
+  await expect(bob.page.getByTestId('other-wish')).toContainText('Heckenschere');
+  bob.page.once('dialog', (d) => d.accept());
+  await bob.page.getByTestId('delete-idea').click();
+  await expect(bob.page.getByTestId('other-wish')).toHaveCount(0);
+  await Promise.all([owner, bob, carol].map((u) => u.ctx.close()));
 });
 
 test.describe('first-time visitors and choices', () => {
