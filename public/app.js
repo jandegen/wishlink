@@ -10,6 +10,7 @@
   let user = null;
   let oidcEnabled = false;
   let operator = null; // who runs this instance (config OPERATOR_NAME), shown in the privacy notice
+  let theme = 'default';
   let pollTimer = null;
   const root = document.getElementById('app');
 
@@ -158,6 +159,22 @@
     pollTimer = setTimeout(() => reload(), 2000);
   }
 
+  function applyTheme(value) {
+    theme = value === 'christmas' ? 'christmas' : 'default';
+    document.documentElement.dataset.theme = theme;
+    document.querySelector('meta[name="theme-color"]').content = theme === 'christmas' ? '#123e35' : '#6c4cf1';
+  }
+
+  async function syncTheme() {
+    try { applyTheme((await api('GET', '/settings')).theme); } catch { /* retain the last known theme */ }
+  }
+
+  function christmasAtmosphere() {
+    return h('div', { class: 'christmas-atmosphere', 'aria-hidden': 'true', 'data-testid': 'christmas-atmosphere' },
+      h('div', { class: 'christmas-snow' }, Array.from({ length: 18 }, () => h('i'))),
+      h('div', { class: 'christmas-stars' }, Array.from({ length: 5 }, () => h('i'))));
+  }
+
   // ---------- layout ----------
   function layout(active, content) {
     const langSel = h('select', {
@@ -165,6 +182,7 @@
       onchange: async (e) => { await loadLang(e.target.value); route(); },
     }, Object.entries(LANGS).map(([c, n]) => h('option', { value: c, selected: c === lang }, n)));
     root.replaceChildren(
+      christmasAtmosphere(),
       h('header', { class: 'top' }, h('div', { class: 'bar' },
         h('a', { class: 'brand', href: '#/' }, h('span', { class: 'logo' }, '🎁'), t('app.name')),
         user && h('nav', { class: 'tabs' },
@@ -177,7 +195,7 @@
         user && h('div', { class: 'me' }, avatar(user),
           h('span', { class: 'name', 'data-testid': 'whoami' }, user.username),
           h('button', { class: 'ghost small', 'data-testid': 'logout', onclick: logout }, t('nav.logout'))))),
-      h('main', {}, content));
+      h('main', { class: user ? '' : 'auth-page' }, content));
   }
 
   async function logout() {
@@ -504,8 +522,26 @@
     if (!user.isAdmin) { location.replace('#/mine'); return; }
     const { users } = await api('GET', '/admin/users');
     const refresh = () => adminView();
+    const themeError = h('p', { class: 'error', role: 'alert' });
+    const themeButton = h('button', { type: 'button', class: 'primary', 'data-testid': 'christmas-toggle',
+      'aria-pressed': String(theme === 'christmas'), onclick: async () => {
+        themeButton.disabled = true;
+        themeError.textContent = '';
+        try {
+          const result = await api('PUT', '/admin/settings', { theme: theme === 'christmas' ? 'default' : 'christmas' });
+          applyTheme(result.theme);
+          await adminView();
+          toast(t('admin.themeSaved'));
+        } catch (e) { themeError.textContent = errorText(e); themeButton.disabled = false; }
+      } }, t(theme === 'christmas' ? 'admin.disableChristmas' : 'admin.enableChristmas'));
     layout('admin', [
       h('div', { class: 'page-head' }, h('div', {}, h('h1', {}, t('admin.title')), h('p', { class: 'sub' }, t('admin.subtitle')))),
+      h('section', { class: 'theme-panel', 'aria-labelledby': 'theme-title' },
+        h('div', { class: 'theme-preview', 'aria-hidden': 'true' }),
+        h('div', {}, h('p', { class: 'muted' }, t('admin.appearance')),
+          h('h2', { id: 'theme-title' }, t('admin.christmasTitle')),
+          h('p', { class: 'muted' }, t('admin.christmasHint')),
+          themeButton, themeError)),
       h('div', { class: 'list' }, users.map((u) => h('div', { class: 'user-row', 'data-testid': 'admin-user', 'data-username': u.username },
         avatar(u),
         h('div', { class: 'who' },
@@ -531,6 +567,7 @@
   // ---------- routing ----------
   async function route() {
     clearTimeout(pollTimer);
+    await syncTheme();
     const hash = location.hash || '#/';
     try {
       if (!user) {
@@ -559,6 +596,8 @@
     try { const c = await api('GET', '/auth/config'); oidcEnabled = c.oidc; operator = c.operator; } catch { /* ignore */ }
     try { user = (await api('GET', '/auth/me')).user; } catch { user = null; }
     window.addEventListener('hashchange', route);
+    document.addEventListener('visibilitychange', () => { if (!document.hidden) syncTheme(); });
+    setInterval(() => { if (!document.hidden) syncTheme(); }, 60000);
     route();
   }
   init();

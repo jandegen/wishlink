@@ -144,3 +144,33 @@ DEV runs at **https://wishlink.example.com** (nginx ingress, TLS from cert-manag
 - **Unit** (`test/unit`): validation, password/rate-limit logic, repository privacy rules, OIDC token checks.
 - **API integration** (`test/unit/api.test.js`): real HTTP against in-memory DB, incl. the owner-can't-see-claims guarantees, CSRF/origin and auth.
 - **E2E** (`test/e2e`, with a fixture shop serving Open Graph pages): Chromium, three simultaneous users; verifies publish flow, claims visibility and that the owner's page and network responses contain nothing about claims; XSS escaping; German/English switch.
+
+
+## Christmas theme
+
+In **Administration**, use **Christmas-Theme aktivieren / deaktivieren** (English: **Enable / Disable Christmas theme**).
+The standard appearance remains the default. The choice is stored in SQLite's `instance_settings` table on the existing data volume,
+so it survives restarts and deployments. Schema creation is additive and runs automatically on existing installations.
+The theme applies to everyone, including login and registration, in light and dark mode. Clients fetch the setting on navigation,
+when returning to the tab, and every 60 seconds while visible. No restart or environment variable is required.
+
+`GET /api/settings` is public, uncached and returns only `{ "theme": "default" | "christmas" }`.
+`PUT /api/admin/settings` accepts the same object; requires an admin session and the existing origin/CSRF checks.
+Other values return HTTP 400. No wish or claim permissions change.
+
+The winter village forms the login page background, with gentle CSS snow and starlight behind the header and content.
+Signed-in pages use a faint winter landscape. There is no separate banner or animation control.
+`prefers-reduced-motion: reduce` disables animations and hides snow and stars automatically. Decoration is hidden from screen readers
+and ignores pointer events so forms and navigation stay interactive.
+All strings are provided in German and English; the image contains no text. No external assets, fonts or animation dependencies are loaded.
+
+### Original artwork
+
+`public/images/christmas-village.webp` was created with the built-in Imagegen tool and optimised to WebP (about 240 KB).
+The snow, starlight, palettes and layout were authored in `public/style.css` and `public/app.js`.
+Generation prompt:
+
+> Use case: illustration-story. Asset type: wide website Christmas banner for a wish list app. Create an elegant handcrafted paper-cut winter village at night: small warmly lit cottages nestled among snowy fir trees, beautifully wrapped gifts in foreground, a delicate golden shooting star and tiny stars above. Deep forest green night sky, ivory snow, muted cranberry red and warm antique gold. Wide panoramic composition, quiet dark negative space across left half for HTML text, detailed village grouped on right half. Sophisticated cozy editorial illustration, layered paper textures and subtle grain, crisp silhouettes. No text, letters, logos or watermark.
+
+Tests cover admin-only changes, invalid input, persistence after database reopening, visitor visibility, mobile overflow, translations,
+background interaction and reduced motion, image delivery, and restoring the standard theme.

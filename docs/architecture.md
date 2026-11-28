@@ -29,6 +29,7 @@ Express app (src/app.js)
 - `sessions` – SHA-256 of the session token, `expires_at` (tokens themselves are only in the cookie)
 - `wishes` – owner, title, description, url, `priority` (1 high … 3 low), `published`
 - `wish_links` – up to 6 links per wish, ordered, with cached preview (`preview_status` pending/ok/failed, title, description, image, site)
+- `instance_settings` – persistent instance appearance (`theme`: `default` or `christmas`), defaults to the standard theme
 - `claims` – `(wish_id, user_id)` primary key, `type` ∈ `gift | contribute | purchased`
 
 ## The privacy invariant (core requirement)
@@ -57,7 +58,7 @@ edit or delete it (`/api/ideas/:id`). Deleting the suggester removes the idea (`
 ## Administration
 
 `users.is_admin` marks admins. The initial admin is created at startup from `ADMIN_*` variables (never promotes an existing user – otherwise
-whoever registered the name first would win). Admin endpoints (`/api/admin/*`) manage accounts only and return no wish or claim data, so the
+whoever registered the name first would win). Admin endpoints (`/api/admin/*`) manage accounts and instance appearance and return no wish or claim data, so the
 owner-privacy rule also holds against admins. Password resets sign the user out everywhere; deleting a user cascades to wishes, claims and sessions.
 
 ## Link previews

@@ -130,6 +130,8 @@ function createRepo(db) {
   }
 
   return {
+    getTheme: () => q("SELECT value FROM instance_settings WHERE key = 'theme'").get()?.value || 'default',
+    setTheme: (theme) => q("INSERT INTO instance_settings (key, value) VALUES ('theme', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").run(theme),
     // ---- users ----
     createUser({ username, firstName, lastName, email = null, passwordHash = null, oidcSub = null, isAdmin = false }) {
       const r = stmts.insertUser.run(username, firstName, lastName, email || null, passwordHash, oidcSub, isAdmin ? 1 : 0);

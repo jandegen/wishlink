@@ -132,5 +132,12 @@
   "account.saveName": "Save name",
   "account.nameChanged": "Name changed.",
   "error.admin_no_wishes": "Administrators have no wishes and cannot see anyone else's.",
-  "idea.byYou": "Your idea"
+  "idea.byYou": "Your idea",
+  "admin.appearance": "Appearance · Entire instance",
+  "admin.christmasTitle": "A little Christmas magic",
+  "admin.christmasHint": "A winter village, forest greens and golden stars – including the login page. Applies to everyone within a minute or on navigation.",
+  "admin.enableChristmas": "Enable Christmas theme",
+  "admin.disableChristmas": "Disable Christmas theme",
+  "admin.themeSaved": "Appearance saved.",
+  "error.invalid_theme": "Please choose a valid theme."
 }

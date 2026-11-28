@@ -99,7 +99,7 @@ function createApp({ db, config, oidcClient, rateLimiter, previewFetcher }) {
     if (!req.user) return next(new HttpError(401, 'unauthenticated'));
     return req.user.is_admin ? next() : next(new HttpError(403, 'forbidden'));
   };
-  // Administrators manage accounts only: they have no wishes and cannot see anyone else's.
+  // Administrators manage accounts and appearance: they have no wishes and cannot see anyone else's.
   const requireMember = (req, res, next) => {
     if (!req.user) return next(new HttpError(401, 'unauthenticated'));
     return req.user.is_admin ? next(new HttpError(403, 'admin_no_wishes')) : next();
@@ -114,6 +114,16 @@ function createApp({ db, config, oidcClient, rateLimiter, previewFetcher }) {
   app.use('/api', api);
 
   api.get('/health', (req, res) => res.json({ status: 'ok' }));
+
+  // Public appearance only; never expose any other instance configuration.
+  api.get('/settings', (req, res) => {
+    res.set('Cache-Control', 'no-store').json({ theme: repo.getTheme() });
+  });
+  api.put('/admin/settings', requireAdmin, (req, res) => {
+    if (!['default', 'christmas'].includes(req.body?.theme)) throw new HttpError(400, 'invalid_theme');
+    repo.setTheme(req.body.theme);
+    res.json({ theme: repo.getTheme() });
+  });
 
   // ---------- auth ----------
   api.get('/auth/config', (req, res) => res.json({ oidc: Boolean(oidc), operator: config.operatorName || null }));

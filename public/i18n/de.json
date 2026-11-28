@@ -132,5 +132,12 @@
   "account.saveName": "Namen speichern",
   "account.nameChanged": "Name geändert.",
   "error.admin_no_wishes": "Administratoren haben keine Wünsche und sehen keine Wünsche anderer.",
-  "idea.byYou": "Idee von dir"
+  "idea.byYou": "Idee von dir",
+  "admin.appearance": "Darstellung · Für die ganze Instanz",
+  "admin.christmasTitle": "Ein bisschen Weihnachtszauber",
+  "admin.christmasHint": "Winterdorf, Tannengrün und goldene Sterne – auch auf der Anmeldeseite. Die Änderung gilt für alle spätestens nach einer Minute oder beim Seitenwechsel.",
+  "admin.enableChristmas": "Christmas-Theme aktivieren",
+  "admin.disableChristmas": "Christmas-Theme deaktivieren",
+  "admin.themeSaved": "Darstellung gespeichert.",
+  "error.invalid_theme": "Bitte wähle ein gültiges Theme."
 }

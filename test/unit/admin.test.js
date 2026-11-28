@@ -154,3 +154,35 @@ test('change own password: needs current password, signs out other sessions', as
   assert.equal((await a2('GET', '/api/auth/me')).status, 401); // other session is gone
   assert.equal((await a2('POST', '/api/auth/login', { login: 'anna', password: 'new-password-1' })).status, 200);
 });
+
+test('instance theme: public read, admin-only writes and strict validation', async (t) => {
+  const s = await start(); t.after(s.close);
+  const [admin, member, anon] = [s.client(), s.client(), s.client()];
+  assert.deepEqual((await anon('GET', '/api/settings')).body, { theme: 'default' });
+  assert.equal((await anon('PUT', '/api/admin/settings', { theme: 'christmas' })).status, 401);
+  await member('POST', '/api/auth/register', reg('member'));
+  assert.equal((await member('PUT', '/api/admin/settings', { theme: 'christmas' })).status, 403);
+  await admin('POST', '/api/auth/login', { login: 'admin', password: 'admin-pass-1' });
+  for (const theme of ['', null, true, {}, 'unknown']) {
+    assert.equal((await admin('PUT', '/api/admin/settings', { theme })).status, 400);
+  }
+  assert.deepEqual((await admin('PUT', '/api/admin/settings', { theme: 'christmas' })).body, { theme: 'christmas' });
+  assert.deepEqual((await anon('GET', '/api/settings')).body, { theme: 'christmas' });
+  assert.equal((await admin('PUT', '/api/admin/settings', {})).status, 400);
+  assert.deepEqual((await anon('GET', '/api/settings')).body, { theme: 'christmas' });
+  assert.deepEqual((await admin('PUT', '/api/admin/settings', { theme: 'default' })).body, { theme: 'default' });
+});
+
+test('instance theme survives database reopening and schema migration', () => {
+  const fs = require('node:fs'); const os = require('node:os'); const path = require('node:path');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wl-theme-'));
+  const file = path.join(dir, 'theme.db');
+  let db;
+  try {
+    db = openDatabase(file);
+    createRepo(db).setTheme('christmas');
+    db.close();
+    db = openDatabase(file);
+    assert.equal(createRepo(db).getTheme(), 'christmas');
+  } finally { db?.close(); fs.rmSync(dir, { recursive: true, force: true }); }
+});
