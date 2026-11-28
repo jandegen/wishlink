@@ -23,7 +23,7 @@ module.exports = defineConfig({
       command: 'node src/server.js',
       url: `http://127.0.0.1:${PORT}/api/health`,
       reuseExistingServer: false,
-      env: { PORT: String(PORT), DATABASE_PATH: ':memory:', PREVIEW_ALLOW_PRIVATE: 'true', OPERATOR_NAME: 'Max Mustermann', ADMIN_USERNAME: 'admin', ADMIN_PASSWORD: 'admin-e2e-pass1' },
+      env: { PORT: String(PORT), DATABASE_PATH: ':memory:', PREVIEW_ALLOW_PRIVATE: 'true', AUTH_RATE_LIMIT: '1000', OPERATOR_NAME: 'Max Mustermann', ADMIN_USERNAME: 'admin', ADMIN_PASSWORD: 'admin-e2e-pass1' },
     },
   ],
 });

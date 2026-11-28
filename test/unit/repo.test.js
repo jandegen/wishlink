@@ -25,7 +25,7 @@ test('owner can neither claim nor view claim data of own wishes', () => {
   const { repo, owner, bob } = setup();
   const { id } = repo.createWish(owner, wish);
   repo.setPublished(id, owner, true);
-  repo.setClaim(id, bob, 'purchased');
+  repo.setClaim(id, bob, 'gift');
   assert.equal(repo.setClaim(id, owner, 'gift'), 'not_found');
   assert.equal(repo.listWishesForViewer(owner, owner), null);
   const own = repo.listOwnWishes(owner);
@@ -38,11 +38,11 @@ test('other users see all claims; claim upsert replaces type; removal works', ()
   const { repo, owner, bob, carol } = setup();
   const { id } = repo.createWish(owner, wish);
   repo.setPublished(id, owner, true);
-  repo.setClaim(id, bob, 'gift');
+  repo.setClaim(id, bob, 'contribute');
   repo.setClaim(id, carol, 'contribute');
-  repo.setClaim(id, bob, 'purchased');
+  repo.setClaim(id, bob, 'gift');
   const claims = repo.listWishesForViewer(owner, carol).wishes[0].claims;
-  assert.deepEqual(claims.map((c) => [c.username, c.type]), [['bob', 'purchased'], ['carol', 'contribute']]);
+  assert.deepEqual(claims.map((c) => [c.username, c.type]), [['bob', 'gift'], ['carol', 'contribute']]);
   repo.removeClaim(id, bob);
   assert.equal(repo.listWishesForViewer(owner, carol).wishes[0].claims.length, 1);
 });

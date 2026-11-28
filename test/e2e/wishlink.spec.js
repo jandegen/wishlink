@@ -102,7 +102,7 @@ test('full flow: owner publishes wish, others claim, owner sees nothing', async 
   await expect(card(owner.page, owner.name)).toHaveCount(0); // never lists themself
 
   // Bob removes his mark
-  await bob.page.getByTestId('claim-remove').click();
+  await bob.page.getByTestId('claim-gift').click();
   await expect(bob.page.getByTestId('claims')).not.toContainText('du');
 
   // Owner unpublishes -> hidden again
@@ -187,15 +187,15 @@ test.describe('mobile (360px)', () => {
     await card(viewer.page, owner.name).click();
     await expect(viewer.page.getByTestId('other-wish')).toBeVisible();
     await noOverflow(viewer.page, 'user wishes');
-    for (const type of ['gift', 'contribute', 'purchased']) {
+    for (const type of ['gift', 'contribute']) {
       const btn = viewer.page.getByTestId(`claim-${type}`);
       const box = await btn.boundingBox();
       expect(box.x).toBeGreaterThanOrEqual(0);
       expect(box.x + box.width).toBeLessThanOrEqual(360);
       expect(box.height).toBeGreaterThanOrEqual(44); // touch target
     }
-    await viewer.page.getByTestId('claim-purchased').tap();
-    await expect(viewer.page.getByTestId('claims')).toContainText('du (hat gekauft)');
+    await viewer.page.getByTestId('claim-gift').tap();
+    await expect(viewer.page.getByTestId('claims')).toContainText('du (schenkt)');
     await noOverflow(viewer.page, 'user wishes (claimed)');
     await Promise.all([owner, viewer].map((u) => u.ctx.close()));
   });
@@ -401,6 +401,91 @@ test('ideas: users add ideas for others; the person concerned never sees them', 
   await Promise.all([owner, bob, carol].map((u) => u.ctx.close()));
 });
 
+test('quantity: owner needs several, others take part of them and see how many are free', async ({ browser }) => {
+  const owner = await newUser(browser, 'qo');
+  const bob = await newUser(browser, 'qb');
+  const carol = await newUser(browser, 'qc');
+  const dave = await newUser(browser, 'qd');
+  await owner.page.getByTestId('add-wish').click();
+  await owner.page.fill('input[name=title]', 'Stühle');
+  await expect(owner.page.getByTestId('wish-quantity')).toHaveValue('1'); // default
+  await owner.page.getByTestId('wish-quantity').fill('3');
+  await owner.page.getByRole('button', { name: 'Speichern' }).click();
+  await expect(owner.page.getByTestId('qty-badge')).toHaveText('×3');
+  await owner.page.getByTestId('toggle-publish').click();
+  await expect(owner.page.getByTestId('my-wish')).toContainText('Freigegeben');
+
+  await bob.page.goto('/#/users');
+  await card(bob.page, owner.name).click();
+  await expect(bob.page.getByTestId('stock')).toContainText('0 von 3 vergeben');
+  await bob.page.getByTestId('claim-amount').fill('2');
+  await bob.page.getByTestId('claim-gift').click();
+  await expect(bob.page.getByTestId('stock')).toContainText('2 von 3 vergeben');
+  await expect(bob.page.getByTestId('claims')).toContainText('du (schenkt 2×)');
+
+  await carol.page.goto('/#/users');
+  await card(carol.page, owner.name).click();
+  await expect(carol.page.getByTestId('stock')).toContainText('noch 1 frei');
+  await expect(carol.page.getByTestId('claim-amount')).toHaveAttribute('max', '1');
+  await expect(carol.page.getByTestId('claim-contribution')).toHaveCount(0); // amount of money only when taking part
+  await carol.page.getByTestId('claim-gift').click();
+  await expect(carol.page.getByTestId('stock')).toContainText('alles vergeben');
+  // someone else cannot take anything any more (but may still contribute)
+  await dave.page.goto('/#/users');
+  await card(dave.page, owner.name).click();
+  await expect(dave.page.getByTestId('claim-gift')).toBeDisabled();
+  await expect(dave.page.getByTestId('claim-contribute')).toBeEnabled();
+
+  // owner sees only the quantity, never how many are taken
+  await owner.page.reload();
+  const html = await owner.page.content();
+  expect(html).not.toContain('vergeben');
+  expect(html).not.toContain('frei');
+  await Promise.all([owner, bob, carol, dave].map((u) => u.ctx.close()));
+});
+
+test('comments are visible to everybody except the owner; contributions can state an amount', async ({ browser }) => {
+  const owner = await newUser(browser, 'co');
+  const bob = await newUser(browser, 'cb');
+  const carol = await newUser(browser, 'cc');
+  await owner.page.getByTestId('add-wish').click();
+  await owner.page.fill('input[name=title]', 'Kaffeemaschine');
+  await owner.page.getByRole('button', { name: 'Speichern' }).click();
+  await owner.page.getByTestId('toggle-publish').click();
+  await expect(owner.page.getByTestId('my-wish')).toContainText('Freigegeben');
+
+  await bob.page.goto('/#/users');
+  await card(bob.page, owner.name).click();
+  await bob.page.getByTestId('comments').locator('summary').click();
+  await expect(bob.page.getByTestId('comments')).toContainText('sieht diese Kommentare nie');
+  await bob.page.getByTestId('comment-input').fill('Wir legen zusammen, wer macht mit?');
+  await bob.page.getByTestId('comment-submit').click();
+  await expect(bob.page.getByTestId('comment')).toContainText('Wir legen zusammen'); // section stays open after saving
+  await expect(bob.page.getByTestId('claim-contribution')).toHaveCount(0); // not shown before taking part
+  await bob.page.getByTestId('claim-contribute').click();
+  await bob.page.getByTestId('claim-contribution').fill('25,50');
+  await bob.page.getByTestId('claim-contribution').press('Enter'); // saves (change event)
+  await expect(bob.page.getByTestId('claims')).toContainText('du (beteiligt sich mit');
+  await expect(bob.page.getByTestId('claims')).toContainText('25,50');
+
+  await carol.page.goto('/#/users');
+  await card(carol.page, owner.name).click();
+  await expect(carol.page.getByTestId('claims')).toContainText('beteiligt sich mit');
+  await carol.page.getByTestId('comments').locator('summary').click();
+  await expect(carol.page.getByTestId('comment')).toContainText(`${bob.name} Tester`);
+  await expect(carol.page.getByTestId('comment-delete')).toHaveCount(0); // only the author deletes
+
+  const seen = [];
+  owner.page.on('response', async (r) => { if (r.url().includes('/api/')) seen.push(await r.text().catch(() => '')); });
+  await owner.page.reload();
+  await expect(owner.page.getByTestId('my-wish')).toBeVisible();
+  expect((await owner.page.content()) + seen.join('\n')).not.toContain('zusammen');
+
+  await bob.page.getByTestId('comment-delete').click();
+  await expect(bob.page.getByTestId('comment')).toHaveCount(0);
+  await Promise.all([owner, bob, carol].map((u) => u.ctx.close()));
+});
+
 test.describe('first-time visitors and choices', () => {
   test('login page explains what to do: clear "create account" button, no e-mail, privacy notice with the operator', async ({ page }) => {
     await page.goto('/');
@@ -436,7 +521,7 @@ test.describe('first-time visitors and choices', () => {
     await expect(page.getByTestId('privacy-note')).toContainText("Max Mustermann's private server");
   });
 
-  test('a choice is clear and reversible: shown as "Your choice", taken back by the button or by clicking it again', async ({ browser }) => {
+  test('choices use compact checked toggles and can be switched or taken back with mouse and keyboard', async ({ browser }) => {
     const owner = await newUser(browser, 'ch');
     const viewer = await newUser(browser, 'cv');
     await owner.page.getByTestId('add-wish').click();
@@ -451,15 +536,28 @@ test.describe('first-time visitors and choices', () => {
     await expect(viewer.page.getByTestId('claim-remove')).toHaveCount(0); // nothing chosen yet: no confusing button
 
     await viewer.page.getByTestId('claim-contribute').click();
-    await expect(viewer.page.locator('.my-choice')).toContainText('Deine Auswahl: Ich beteilige mich');
+    await expect(viewer.page.getByTestId('claim-contribute').locator('.claim-check')).toHaveText('✓');
+    await expect(viewer.page.getByTestId('claim-contribute')).toHaveAttribute('title', /Erneut anklicken/);
+    await expect(viewer.page.getByTestId('claim-contribute')).toHaveAttribute('aria-description', /zurückzunehmen/);
+    await expect(viewer.page.locator('.my-choice')).toHaveCount(0);
     await expect(viewer.page.getByTestId('claim-contribute')).toHaveAttribute('aria-pressed', 'true');
-    await viewer.page.getByRole('button', { name: /Auswahl zurücknehmen/ }).click();
+    await viewer.page.getByTestId('claim-contribute').focus();
+    await viewer.page.keyboard.press('Space');
+    await expect(viewer.page.getByTestId('claim-contribute')).toHaveAttribute('aria-pressed', 'false');
+    await expect(viewer.page.getByTestId('claim-contribute').locator('.claim-check')).toHaveCount(0);
     await expect(viewer.page.locator('.my-choice')).toHaveCount(0);
     await expect(viewer.page.getByTestId('claims')).toHaveCount(0);
 
     await viewer.page.getByTestId('claim-gift').click();            // choose again ...
     await expect(viewer.page.getByTestId('claims')).toContainText('du (schenkt)');
-    await viewer.page.getByTestId('claim-gift').click();            // ... and take it back by clicking the active choice
+    await expect(viewer.page.getByTestId('claim-gift').locator('.claim-check')).toBeVisible();
+    await viewer.page.getByTestId('claim-contribute').click();     // switching releases the gift reservation
+    await expect(viewer.page.getByTestId('claim-gift')).toHaveAttribute('aria-pressed', 'false');
+    await expect(viewer.page.getByTestId('claim-contribute')).toHaveAttribute('aria-pressed', 'true');
+    await expect(viewer.page.getByTestId('gift-moment')).toHaveCount(0);
+    await viewer.page.getByTestId('claim-gift').click();
+    await expect(viewer.page.getByTestId('claim-gift')).toHaveAttribute('aria-pressed', 'true');
+    await viewer.page.getByTestId('claim-gift').click();            // take back the active choice
     await expect(viewer.page.getByTestId('claims')).toHaveCount(0);
     await expect(viewer.page.locator('.my-choice')).toHaveCount(0);
     await Promise.all([owner, viewer].map((u) => u.ctx.close()));

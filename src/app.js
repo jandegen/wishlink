@@ -5,7 +5,7 @@ const { createRepo } = require('./repo');
 const { createOidcClient } = require('./oidc');
 const { fetchPreview: defaultFetchPreview } = require('./preview');
 const { hashPassword, verifyPassword, generatePassword, newToken, sha256, createRateLimiter } = require('./security');
-const { ValidationError, validateRegistration, validateName, validateWish, validateClaimType, optionalUrl } = require('./validation');
+const { ValidationError, validateRegistration, validateName, validateWish, validateClaimType, validateAmount, validateContribution, validateComment, optionalUrl } = require('./validation');
 
 const COOKIE = 'wl_session';
 const OIDC_COOKIE = 'wl_oidc';
@@ -27,7 +27,7 @@ function createApp({ db, config, oidcClient, rateLimiter, previewFetcher }) {
   const repo = createRepo(db);
   const app = express();
   const oidc = oidcClient || (config.oidc.enabled ? createOidcClient(config.oidc) : null);
-  const limiter = rateLimiter || createRateLimiter({ max: 20, windowMs: 60_000 });
+  const limiter = rateLimiter || createRateLimiter({ max: config.authRateLimit || 20, windowMs: 60_000 });
   const fetchPreview = previewFetcher || ((url) => defaultFetchPreview(url, { allowPrivate: config.previewAllowPrivate }));
   const previewLimiter = createRateLimiter({ max: 30, windowMs: 60_000 });
 
@@ -293,10 +293,25 @@ function createApp({ db, config, oidcClient, rateLimiter, previewFetcher }) {
     res.status(204).end();
   });
 
+  // ---------- comments: visible to everyone except the owner of the wish ----------
+  api.post('/wishes/:id/comments', requireMember, (req, res) => {
+    const comment = repo.addComment(idParam(req), req.user.id, validateComment(req.body));
+    if (!comment) throw new HttpError(404, 'not_found');
+    res.status(201).json({ comment });
+  });
+
+  api.delete('/comments/:id', requireMember, (req, res) => {
+    if (!repo.deleteComment(idParam(req), req.user.id)) throw new HttpError(404, 'not_found');
+    res.status(204).end();
+  });
+
   api.put('/wishes/:id/claim', requireMember, (req, res) => {
     const id = idParam(req);
     const type = validateClaimType(req.body?.type);
-    if (repo.setClaim(id, req.user.id, type) === 'not_found') throw new HttpError(404, 'not_found');
+    const result = repo.setClaim(id, req.user.id, type, validateAmount(req.body?.amount),
+      type === 'contribute' ? validateContribution(req.body?.contribution) : null);
+    if (result === 'not_found') throw new HttpError(404, 'not_found');
+    if (result === 'too_many') throw new HttpError(409, 'too_many');
     res.status(204).end();
   });
 

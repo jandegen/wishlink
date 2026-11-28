@@ -45,7 +45,7 @@ All under `/api`, JSON, cookie session. Errors: `{ "error": "<code>", "field": "
 | `DELETE /wishes/:id` | delete own wish |
 | `GET /users` | other users with ≥1 published wish |
 | `GET /users/:id/wishes` | their published wishes **with claims** (404 for yourself) |
-| `PUT /wishes/:id/claim` `{type: gift\|contribute\|purchased}` / `DELETE` | set / remove own mark |
+| `PUT /wishes/:id/claim` `{type: gift\|contribute}` / `DELETE` | set / remove own mark |
 | `PUT /auth/profile` `{firstName, lastName}` | change own first / last name |
 | `POST /users/:id/ideas` / `PUT`, `DELETE /ideas/:id` | add an **idea** for another user (hidden from that user, visible to everyone else); only the suggester edits / deletes it |
 | `POST /auth/password` `{currentPassword, newPassword}` | change own password (other sessions are signed out) |
@@ -174,3 +174,27 @@ Generation prompt:
 
 Tests cover admin-only changes, invalid input, persistence after database reopening, visitor visibility, mobile overflow, translations,
 background interaction and reduced motion, image delivery, and restoring the standard theme.
+
+## Gift promise highlights
+
+Other viewers see a compact gift badge over the bottom of the preview on wishes with a `gift` claim; it adds no height to the text area. The ordinary theme uses a smiling pink parcel
+and a heart; Christmas uses a red parcel, golden bow and stars. The badge says "Wird geschenkt" when fully reserved or "Teilweise vergeben" when some items remain.
+Reserved quantities appear only in the existing stock controls, avoiding duplicate information. Contributions alone do not trigger the gift marker. After a successful new gift promise, the giver sees a brief
+animation and a translated confirmation. Refreshes, quantity edits and other viewers do not replay the celebration.
+Removing the final gift promise removes the highlight. CSS draws all decoration locally and respects reduced motion.
+Owner cards never render these markers; the owner API remains unchanged and contains no claims or reserved counts.
+
+
+Gift and contribution choices use compact toggle buttons: the selected option has a checkmark, a visible outline and `aria-pressed`.
+Clicking it again takes the choice back; clicking the other option switches the choice. A translated tooltip and accessible description
+explain how to undo the selection. There is no separate selection summary or undo box; quantities and contribution amounts remain in their controls.
+
+
+## Mobile viewport stability
+
+Form controls use at least 16px text, including nested labels, language selection, quantities, contributions and comments,
+to avoid iPhone Safari focus zoom. User pinch zoom stays enabled; there is no viewport reset script.
+Cards can shrink within grid tracks and long titles/descriptions wrap. Header and page padding respect horizontal safe-area insets.
+Mobile regression tests cover both themes at 320px/390px and landscape, editing/closing a wish, account fields,
+quantities, contributions and comments. They assert actual control font sizes and element bounds instead of relying only on document overflow.
+These automated checks use Chromium mobile emulation; they do not emulate iPhone Safari's keyboard-triggered zoom.

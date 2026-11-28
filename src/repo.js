@@ -7,6 +7,7 @@
  * - Functions that serve a wish OWNER (`listOwnWishes`, `getOwnWish`, update/publish/delete) never touch the
  *   `claims` table and only see rows with `suggested_by IS NULL`: an idea (`suggested_by` = another user) that
  *   someone added for the owner is invisible and untouchable for the owner.
+ * - Comments (`wish_comments`) are, like claims, only ever returned to viewers, never to the owner of the wish.
  * - Claim data and ideas are only returned by `listWishesForViewer`, which refuses to serve a user's own list.
  * - Administrators have no wishes and cannot see anyone's: they are neither listed as owners nor allowed viewers.
  */
@@ -33,9 +34,15 @@ function createRepo(db) {
     description: w.description,
     links: links.map(linkDto),
     priority: w.priority,
+    quantity: w.quantity,
     published: Boolean(w.published),
     createdAt: w.created_at,
     updatedAt: w.updated_at,
+  });
+
+  const commentDto = (m) => ({
+    id: m.id, wishId: m.wish_id, userId: m.user_id, body: m.body, createdAt: m.created_at,
+    username: m.username, firstName: m.first_name, lastName: m.last_name,
   });
 
   const stmts = {
@@ -58,10 +65,10 @@ function createRepo(db) {
                     WHERE s.token_hash = ? AND s.expires_at > ?`),
     deleteSession: q('DELETE FROM sessions WHERE token_hash = ?'),
     purgeSessions: q('DELETE FROM sessions WHERE expires_at <= ?'),
-    insertWish: q('INSERT INTO wishes (owner_id, title, description, priority) VALUES (?, ?, ?, ?)'),
-    insertIdea: q('INSERT INTO wishes (owner_id, title, description, priority, published, suggested_by) VALUES (?, ?, ?, ?, 1, ?)'),
+    insertWish: q('INSERT INTO wishes (owner_id, title, description, priority, quantity) VALUES (?, ?, ?, ?, ?)'),
+    insertIdea: q('INSERT INTO wishes (owner_id, title, description, priority, quantity, published, suggested_by) VALUES (?, ?, ?, ?, ?, 1, ?)'),
     ideaById: q('SELECT * FROM wishes WHERE id = ? AND suggested_by = ?'),
-    updateIdea: q(`UPDATE wishes SET title = ?, description = ?, priority = ?, updated_at = datetime('now')
+    updateIdea: q(`UPDATE wishes SET title = ?, description = ?, priority = ?, quantity = ?, updated_at = datetime('now')
                    WHERE id = ? AND suggested_by = ?`),
     deleteIdea: q('DELETE FROM wishes WHERE id = ? AND suggested_by = ?'),
     linksOfWish: q('SELECT * FROM wish_links WHERE wish_id = ? ORDER BY position, id'),
@@ -79,7 +86,7 @@ function createRepo(db) {
     ownWishes: q(`SELECT * FROM wishes WHERE owner_id = ? AND suggested_by IS NULL
                   ORDER BY priority ASC, created_at DESC, id DESC`),
     ownWish: q('SELECT * FROM wishes WHERE id = ? AND owner_id = ? AND suggested_by IS NULL'),
-    updateWish: q(`UPDATE wishes SET title = ?, description = ?, priority = ?,
+    updateWish: q(`UPDATE wishes SET title = ?, description = ?, priority = ?, quantity = ?,
                    updated_at = datetime('now') WHERE id = ? AND owner_id = ? AND suggested_by IS NULL`),
     setPublished: q(`UPDATE wishes SET published = ?, updated_at = datetime('now')
                      WHERE id = ? AND owner_id = ? AND suggested_by IS NULL`),
@@ -93,12 +100,24 @@ function createRepo(db) {
                           FROM wishes w LEFT JOIN users s ON s.id = w.suggested_by
                           WHERE w.owner_id = ? AND w.published = 1
                           ORDER BY w.priority ASC, w.created_at DESC, w.id DESC`),
-    claimsForWishes: q(`SELECT c.wish_id, c.user_id, c.type, c.created_at, u.username, u.first_name, u.last_name
+    claimsForWishes: q(`SELECT c.wish_id, c.user_id, c.type, c.amount, c.contribution_cents, c.created_at, u.username, u.first_name, u.last_name
                         FROM claims c JOIN users u ON u.id = c.user_id
                         WHERE c.wish_id IN (SELECT id FROM wishes WHERE owner_id = ? AND published = 1)
                         ORDER BY c.created_at ASC`),
-    upsertClaim: q(`INSERT INTO claims (wish_id, user_id, type) VALUES (?, ?, ?)
-                    ON CONFLICT(wish_id, user_id) DO UPDATE SET type = excluded.type`),
+    upsertClaim: q(`INSERT INTO claims (wish_id, user_id, type, amount, contribution_cents) VALUES (?, ?, ?, ?, ?)
+                    ON CONFLICT(wish_id, user_id) DO UPDATE SET type = excluded.type, amount = excluded.amount,
+                    contribution_cents = excluded.contribution_cents`),
+    commentsForWishes: q(`SELECT m.id, m.wish_id, m.user_id, m.body, m.created_at, u.username, u.first_name, u.last_name
+                          FROM wish_comments m JOIN users u ON u.id = m.user_id
+                          WHERE m.wish_id IN (SELECT id FROM wishes WHERE owner_id = ? AND published = 1)
+                          ORDER BY m.created_at ASC, m.id ASC`),
+    insertComment: q('INSERT INTO wish_comments (wish_id, user_id, body) VALUES (?, ?, ?)'),
+    commentById: q(`SELECT m.id, m.wish_id, m.user_id, m.body, m.created_at, u.username, u.first_name, u.last_name
+                    FROM wish_comments m JOIN users u ON u.id = m.user_id WHERE m.id = ?`),
+    deleteComment: q('DELETE FROM wish_comments WHERE id = ? AND user_id = ?'),
+    // Items already taken by OTHERS: only 'gift' counts, a contribution is a share and takes nothing.
+    takenByOthers: q(`SELECT COALESCE(SUM(amount), 0) AS n FROM claims
+                      WHERE wish_id = ? AND user_id != ? AND type = 'gift'`),
     deleteClaim: q('DELETE FROM claims WHERE wish_id = ? AND user_id = ?'),
   };
 
@@ -163,7 +182,7 @@ function createRepo(db) {
     // ---- owner view (never exposes claims) ----
     /** Returns { id, pendingLinks }. */
     createWish(ownerId, w) {
-      const id = Number(stmts.insertWish.run(ownerId, w.title, w.description, w.priority).lastInsertRowid);
+      const id = Number(stmts.insertWish.run(ownerId, w.title, w.description, w.priority, w.quantity ?? 1).lastInsertRowid);
       return { id, pendingLinks: syncLinks(id, w.links || []) };
     },
     listOwnWishes(ownerId) {
@@ -176,7 +195,7 @@ function createRepo(db) {
     },
     /** Returns null if not owned, else the ids of links that still need a preview. */
     updateWish(id, ownerId, w) {
-      if (stmts.updateWish.run(w.title, w.description, w.priority, id, ownerId).changes === 0) return null;
+      if (stmts.updateWish.run(w.title, w.description, w.priority, w.quantity ?? 1, id, ownerId).changes === 0) return null;
       return syncLinks(id, w.links || []);
     },
     getLink: (id) => stmts.linkById.get(id),
@@ -204,9 +223,15 @@ function createRepo(db) {
         if (!claims.has(c.wish_id)) claims.set(c.wish_id, []);
         claims.get(c.wish_id).push({
           userId: c.user_id, username: c.username, firstName: c.first_name, lastName: c.last_name,
-          type: c.type, createdAt: c.created_at,
+          type: c.type, amount: c.amount, contributionCents: c.contribution_cents, createdAt: c.created_at,
         });
       }
+      const comments = new Map();
+      for (const m of stmts.commentsForWishes.all(ownerId)) {
+        if (!comments.has(m.wish_id)) comments.set(m.wish_id, []);
+        comments.get(m.wish_id).push(commentDto(m));
+      }
+      const taken = (list) => list.filter((c) => c.type !== 'contribute').reduce((n, c) => n + c.amount, 0);
       return {
         owner: { id: owner.id, username: owner.username, firstName: owner.first_name, lastName: owner.last_name },
         wishes: stmts.publishedWishesOf.all(ownerId).map((w) => ({
@@ -214,6 +239,9 @@ function createRepo(db) {
           suggestedBy: w.suggested_by
             ? { id: w.suggested_by, username: w.s_user, firstName: w.s_first, lastName: w.s_last } : null,
           claims: claims.get(w.id) || [],
+          comments: comments.get(w.id) || [],
+          taken: taken(claims.get(w.id) || []),
+          remaining: Math.max(0, w.quantity - taken(claims.get(w.id) || [])),
         })),
       };
     },
@@ -223,7 +251,7 @@ function createRepo(db) {
     createIdea(targetId, suggesterId, w) {
       const target = stmts.userById.get(targetId);
       if (!target || target.is_admin || targetId === suggesterId) return null;
-      const id = Number(stmts.insertIdea.run(targetId, w.title, w.description, w.priority, suggesterId).lastInsertRowid);
+      const id = Number(stmts.insertIdea.run(targetId, w.title, w.description, w.priority, w.quantity ?? 1, suggesterId).lastInsertRowid);
       return { id, pendingLinks: syncLinks(id, w.links || []) };
     },
     getIdea(id, suggesterId) {
@@ -232,17 +260,33 @@ function createRepo(db) {
     },
     /** Only the suggester may change an idea. Returns null if not theirs, else the ids needing a preview. */
     updateIdea(id, suggesterId, w) {
-      if (stmts.updateIdea.run(w.title, w.description, w.priority, id, suggesterId).changes === 0) return null;
+      if (stmts.updateIdea.run(w.title, w.description, w.priority, w.quantity ?? 1, id, suggesterId).changes === 0) return null;
       return syncLinks(id, w.links || []);
     },
     deleteIdea: (id, suggesterId) => stmts.deleteIdea.run(id, suggesterId).changes > 0,
 
-    /** Claim a wish. Returns 'ok' | 'not_found'. Own and unpublished wishes count as not found. */
-    setClaim(wishId, userId, type) {
+    // ---- comments (only for viewers: the wish owner never gets to see them) ----
+    /** Returns the new comment, or null if the wish is unknown / unpublished / the user's own / an admin's. */
+    addComment(wishId, userId, body) {
+      const w = stmts.wishById.get(wishId);
+      if (!w || !w.published || w.owner_id === userId) return null;
+      if (stmts.userById.get(w.owner_id)?.is_admin) return null;
+      const id = Number(stmts.insertComment.run(wishId, userId, body).lastInsertRowid);
+      return commentDto(stmts.commentById.get(id));
+    },
+    /** Only the author can delete a comment. */
+    deleteComment: (id, userId) => stmts.deleteComment.run(id, userId).changes > 0,
+
+    /** Claim a wish. Returns 'ok' | 'not_found' | 'too_many' (more than still free). Own and unpublished wishes count as not found. */
+    setClaim(wishId, userId, type, amount = 1, contributionCents = null) {
       const w = stmts.wishById.get(wishId);
       if (!w || !w.published || w.owner_id === userId) return 'not_found';
       if (stmts.userById.get(w.owner_id)?.is_admin) return 'not_found';
-      stmts.upsertClaim.run(wishId, userId, type);
+      if (type !== 'contribute') {
+        const free = w.quantity - stmts.takenByOthers.get(wishId, userId).n;
+        if (amount > free) return 'too_many';
+      }
+      stmts.upsertClaim.run(wishId, userId, type, type === 'contribute' ? 1 : amount, type === 'contribute' ? contributionCents : null);
       return 'ok';
     },
     removeClaim(wishId, userId) {

@@ -28,7 +28,9 @@ test('registration: rejects bad input', () => {
 
 test('wish: defaults, trimming and url normalisation', () => {
   const w = validateWish({ title: '  Bike ', links: ['https://example.com/a', ' ', 'https://example.com/a', 'https://example.com/b'] });
-  assert.deepEqual(w, { title: 'Bike', description: '', links: ['https://example.com/a', 'https://example.com/b'], priority: 2 });
+  assert.deepEqual(w, { title: 'Bike', description: '', links: ['https://example.com/a', 'https://example.com/b'], priority: 2, quantity: 1 });
+  assert.equal(validateWish({ title: 'x', quantity: '3' }).quantity, 3);
+  for (const q of [0, -1, 1.5, 100, 'abc']) assert.throws(() => validateWish({ title: 'x', quantity: q }), { code: 'invalid_quantity' });
   assert.deepEqual(validateWish({ title: 'x' }).links, []);
 });
 
@@ -44,5 +46,6 @@ test('wish: rejects non-http urls and bad priority', () => {
 
 test('claim type', () => {
   assert.equal(validateClaimType('gift'), 'gift');
+  assert.equal(validateClaimType('purchased'), 'gift'); // legacy value is merged into gift
   assert.throws(() => validateClaimType('steal'), { code: 'invalid_claim_type' });
 });

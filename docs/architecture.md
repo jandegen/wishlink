@@ -30,7 +30,7 @@ Express app (src/app.js)
 - `wishes` – owner, title, description, url, `priority` (1 high … 3 low), `published`
 - `wish_links` – up to 6 links per wish, ordered, with cached preview (`preview_status` pending/ok/failed, title, description, image, site)
 - `instance_settings` – persistent instance appearance (`theme`: `default` or `christmas`), defaults to the standard theme
-- `claims` – `(wish_id, user_id)` primary key, `type` ∈ `gift | contribute | purchased`
+- `claims` – `(wish_id, user_id)` primary key, `type` ∈ `gift | contribute` (older databases had `purchased`; it is migrated to `gift` at startup)
 
 ## The privacy invariant (core requirement)
 
@@ -46,7 +46,14 @@ Enforced in layers:
 4. **Tests** – unit tests on repo and API level, plus a Playwright test that checks UI HTML *and* every API
    response the owner's browser receives for the claimers' names and claim wording.
 
-Other users see, per wish, a list of claimers with name and type (gift / contribute / purchased); a user holds at most one claim per wish and can change or remove it.
+Other users see, per wish, a list of claimers with name and type (gift / contribute); a user holds at most one claim per wish and can change or remove it.
+
+## Comments and contributions
+
+`wish_comments` holds comments of other users on a published wish (or idea). Like claims they are only returned by `listWishesForViewer`; no
+owner-side query touches the table, and the owner cannot comment on or delete anything of their own wish (404). Only the author deletes a
+comment; deleting the author or the wish removes it. A `contribute` claim may carry `contribution_cents` (optional); it is shown to other users
+only and never counts against the quantity.
 
 ## Ideas
 

@@ -4,6 +4,7 @@
   const LANGS = { de: 'Deutsch', en: 'English' }; // add a language: drop /i18n/<code>.json and list it here
   const DEFAULT_LANG = 'de';
   const MAX_LINKS = 6;
+  const MAX_QUANTITY = 99;
   const PRIO_ICON = { 1: '🔥', 2: '⭐', 3: '🌱' };
   let messages = {};
   let lang = DEFAULT_LANG;
@@ -11,7 +12,9 @@
   let oidcEnabled = false;
   let operator = null; // who runs this instance (config OPERATOR_NAME), shown in the privacy notice
   let theme = 'default';
+  let celebratingWishId = null;
   let pollTimer = null;
+  const openComments = new Set(); // wish ids whose comment section is expanded (survives re-rendering)
   const root = document.getElementById('app');
 
   // ---------- i18n ----------
@@ -67,7 +70,7 @@
   }
 
   const fieldKey = (f) => ({
-    title: 'wish.title', links: 'wish.links', description: 'wish.description', username: 'auth.username',
+    title: 'wish.title', quantity: 'wish.quantity', contribution: 'claim.contribution', comment: 'comment.field', amount: 'claim.amount', links: 'wish.links', description: 'wish.description', username: 'auth.username',
     firstName: 'auth.firstName', lastName: 'auth.lastName', password: 'auth.password',
     newPassword: 'account.newPassword',
   }[f] || f);
@@ -80,6 +83,7 @@
   }
 
   const fullName = (u) => `${u.firstName} ${u.lastName}`;
+  const money = (cents) => new Intl.NumberFormat(lang, { style: 'currency', currency: 'EUR' }).format(cents / 100);
   const hostOf = (url) => { try { return new URL(url).hostname.replace(/^www\./, ''); } catch { return url; } };
   const initials = (u) => `${(u.firstName || u.username || '?')[0]}${(u.lastName || '')[0] || ''}`;
 
@@ -137,12 +141,13 @@
   }
 
   /** Tile cover: first available preview image, otherwise a gradient with an icon. */
-  function cover(w, badges) {
+  function cover(w, badges, overlay = null) {
     const img = w.links.map((l) => l.preview?.image).find(Boolean);
     return h('div', { class: `media p${w.priority}` },
-      '🎁', img && remoteImg(img), h('div', { class: 'badges' }, badges));
+      '🎁', img && remoteImg(img), h('div', { class: 'badges' }, badges), overlay);
   }
 
+  const qtyPill = (w) => w.quantity > 1 && h('span', { class: 'pill qty', 'data-testid': 'qty-badge' }, `×${w.quantity}`);
   const prioPill = (w) => h('span', { class: `pill prio${w.priority}` }, `${PRIO_ICON[w.priority]} ${t(`wish.priority.${w.priority}`)}`);
 
   function wishBody(w) {
@@ -173,6 +178,34 @@
     return h('div', { class: 'christmas-atmosphere', 'aria-hidden': 'true', 'data-testid': 'christmas-atmosphere' },
       h('div', { class: 'christmas-snow' }, Array.from({ length: 18 }, () => h('i'))),
       h('div', { class: 'christmas-stars' }, Array.from({ length: 5 }, () => h('i'))));
+  }
+
+  /** Comments on a wish: visible to everybody except the wish owner (who never receives them). */
+  function commentSection(w, owner, refresh) {
+    const err = h('div', { class: 'error', role: 'alert' });
+    const input = h('textarea', { name: 'body', rows: 2, maxlength: 1000, required: true, placeholder: t('comment.placeholder'), 'aria-label': t('comment.field'), 'data-testid': 'comment-input' });
+    const form = h('form', {
+      class: 'comment-form',
+      onsubmit: async (e) => {
+        e.preventDefault();
+        err.textContent = '';
+        try { await api('POST', `/wishes/${w.id}/comments`, { body: input.value }); openComments.add(w.id); refresh(); } catch (ex) { err.textContent = errorText(ex); }
+      },
+    }, input, err, h('button', { class: 'small primary', type: 'submit', 'data-testid': 'comment-submit' }, t('comment.send')));
+    return h('details', {
+      class: 'comments', 'data-testid': 'comments', open: openComments.has(w.id) || undefined,
+      ontoggle: (e) => { if (e.target.open) openComments.add(w.id); else openComments.delete(w.id); },
+    },
+    h('summary', {}, `💬 ${t('comment.title', { count: w.comments.length })}`),
+    h('p', { class: 'muted' }, `🔒 ${t('comment.hidden', { name: owner.firstName })}`),
+    w.comments.length > 0 && h('ul', { class: 'comment-list' }, w.comments.map((m) => h('li', { 'data-testid': 'comment' },
+      h('div', { class: 'meta' }, h('strong', {}, m.userId === user.id ? t('claim.you') : fullName(m)),
+        m.userId === user.id && h('button', {
+          class: 'ghost small danger', 'data-testid': 'comment-delete', 'aria-label': t('comment.delete'),
+          onclick: async () => { await api('DELETE', `/comments/${m.id}`); refresh(); },
+        }, '✕')),
+      h('p', {}, m.body)))),
+    form);
   }
 
   // ---------- layout ----------
@@ -298,7 +331,7 @@
         err.textContent = '';
         const fd = new FormData(form);
         const body = {
-          title: fd.get('title'), description: fd.get('description'), priority: Number(fd.get('priority')),
+          title: fd.get('title'), description: fd.get('description'), priority: Number(fd.get('priority')), quantity: Number(fd.get('quantity')) || 1,
           links: fd.getAll('link').map((s) => String(s).trim()).filter(Boolean),
         };
         try {
@@ -315,6 +348,10 @@
     h('label', {}, t('wish.description'), h('textarea', { name: 'description', rows: 3, maxlength: 5000 }, wish?.description || '')),
     h('label', {}, t('wish.priority'), h('select', { name: 'priority' },
       [1, 2, 3].map((p) => h('option', { value: p, selected: (wish?.priority ?? 2) === p }, `${PRIO_ICON[p]} ${t(`wish.priority.${p}`)}`)))),
+    h('label', {}, t('wish.quantity'), h('input', {
+      name: 'quantity', type: 'number', min: 1, max: MAX_QUANTITY, step: 1, required: true, value: wish?.quantity ?? 1, 'data-testid': 'wish-quantity',
+    })),
+    h('p', { class: 'muted' }, t('wish.quantityHint')),
     h('div', { class: 'field-title' }, t('wish.links')),
     h('p', { class: 'muted' }, t('wish.linksHint', { max: MAX_LINKS })),
     linkBox, addBtn, err,
@@ -344,7 +381,7 @@
       wishes.length === 0
         ? h('div', { class: 'empty-state' }, h('div', { class: 'big' }, '✨'), t('wish.empty'))
         : h('div', { class: 'grid' }, wishes.map((w) => h('article', { class: 'tile', 'data-testid': 'my-wish' },
-          cover(w, [prioPill(w),
+          cover(w, [h('span', { class: 'pill-group' }, prioPill(w), qtyPill(w)),
             h('span', { class: `pill ${w.published ? 'live' : 'draft'}`, title: w.published ? '' : t('wish.draftHint') },
               t(w.published ? 'wish.published' : 'wish.draft'))]),
           wishBody(w),
@@ -374,9 +411,21 @@
     ]);
   }
 
+  // Rendered only from the viewer's claims; never used for the owner's cards.
+  function giftMoment(w, celebrate) {
+    return h('div', { class: `gift-moment${celebrate ? ' gift-celebrate' : ''}`, 'data-testid': 'gift-moment' },
+      h('span', { class: 'gift-icon', 'aria-hidden': 'true' }, h('span', { class: 'gift-friend' },
+        h('span', { class: 'gift-bow' }), h('span', { class: 'gift-box' }, h('span', { class: 'gift-face' })),
+        h('span', { class: 'gift-heart' }, '♥'), h('span', { class: 'gift-star' }, '✦'))),
+      h('span', { class: 'gift-label' }, t(w.remaining > 0 ? 'gift.partial' : 'gift.status')),
+      celebrate && h('div', { class: 'gift-confetti', 'aria-hidden': 'true' }, Array.from({ length: 7 }, () => h('i'))));
+  }
+
   async function userWishesView(id, attempt = 0) {
     if (Number(id) === user.id) { location.replace('#/mine'); return; }
     const { owner, wishes } = await api('GET', `/users/${id}/wishes`);
+    const celebrateId = celebratingWishId;
+    celebratingWishId = null;
     const refresh = () => userWishesView(id);
     layout('users', [
       h('a', { class: 'back', href: '#/users' }, t('others.back')),
@@ -390,18 +439,47 @@
         ? h('div', { class: 'empty-state' }, h('div', { class: 'big' }, '🎈'), t('others.noWishes'))
         : h('div', { class: 'grid' }, wishes.map((w) => {
           const mine = w.claims.find((c) => c.userId === user.id);
+          const multi = w.quantity > 1;
+          const mineTaking = mine && mine.type !== 'contribute'; // a gift takes items, a contribution does not
+          const free = w.remaining + (mineTaking ? mine.amount : 0); // what this user could still take
+          const amountInput = multi && h('input', {
+            type: 'number', min: 1, max: Math.max(1, free), step: 1, value: Math.min(mineTaking ? mine.amount : 1, Math.max(1, free)),
+            'aria-label': t('claim.amount'), 'data-testid': 'claim-amount', disabled: free === 0 && !mineTaking,
+          });
+          const amountOf = () => (multi ? Number(amountInput.value) || 1 : 1);
+          const contribInput = h('input', {
+            type: 'text', inputmode: 'decimal', maxlength: 9, placeholder: t('claim.contributionPlaceholder'), 'aria-label': t('claim.contribution'),
+            'data-testid': 'claim-contribution', value: mine?.type === 'contribute' && mine.contributionCents ? String(mine.contributionCents / 100).replace('.', ',') : '',
+          });
+          const send = async (type) => {
+            try {
+              await api('PUT', `/wishes/${w.id}/claim`, { type, amount: amountOf(), contribution: type === 'contribute' ? contribInput.value.trim() : undefined });
+              if (type === 'gift' && mine?.type !== 'gift') {
+                celebratingWishId = w.id;
+                toast(t(theme === 'christmas' ? 'gift.christmasThanks' : 'gift.thanks'));
+              }
+            } catch (ex) { toast(errorText(ex)); }
+            refresh();
+          };
+          contribInput.addEventListener('change', () => { if (mine?.type === 'contribute') send('contribute'); });
+          if (amountInput) amountInput.addEventListener('change', () => { if (mineTaking) send(mine.type); });
+          const typeText = (c) => t(`claim.type.${c.type}`) + (c.amount > 1 && c.type !== 'contribute' ? ` ${c.amount}×` : '')
+            + (c.type === 'contribute' && c.contributionCents ? ` ${t('claim.withAmount', { amount: money(c.contributionCents) })}` : '');
           const btn = (type) => h('button', {
             class: mine?.type === type ? 'active' : '', 'data-testid': `claim-${type}`, 'aria-pressed': mine?.type === type ? 'true' : 'false',
+            title: mine?.type === type ? t('claim.undoHint') : undefined,
+            'aria-description': mine?.type === type ? t('claim.undoHint') : undefined,
+            disabled: type !== 'contribute' && free === 0 && mine?.type !== type,
             // clicking the chosen option again takes the choice back
             onclick: async () => {
-              if (mine?.type === type) await api('DELETE', `/wishes/${w.id}/claim`); else await api('PUT', `/wishes/${w.id}/claim`, { type });
-              refresh();
+              if (mine?.type === type) { await api('DELETE', `/wishes/${w.id}/claim`); refresh(); } else send(type);
             },
-          }, t(`claim.${type}`));
+          }, mine?.type === type && h('span', { class: 'claim-check', 'aria-hidden': 'true' }, '✓'), t(`claim.${type}`));
           const idea = w.suggestedBy;
           const myIdea = idea && idea.id === user.id;
-          return h('article', { class: `tile${idea ? ' idea' : ''}`, 'data-testid': 'other-wish' },
-            cover(w, [prioPill(w), idea && h('span', { class: 'pill idea-pill', 'data-testid': 'idea-badge' }, `💡 ${(myIdea ? t('idea.byYou') : t('idea.by', { name: fullName(idea) }))}`)]),
+          const gifted = w.claims.some((c) => c.type === 'gift');
+          return h('article', { class: `tile${idea ? ' idea' : ''}${gifted ? ' has-gift' : ''}`, 'data-testid': 'other-wish' },
+            cover(w, [h('span', { class: 'pill-group' }, prioPill(w), qtyPill(w)), idea && h('span', { class: 'pill idea-pill', 'data-testid': 'idea-badge' }, `💡 ${(myIdea ? t('idea.byYou') : t('idea.by', { name: fullName(idea) }))}`)], gifted ? giftMoment(w, celebrateId === w.id) : null),
             wishBody(w),
             h('div', { class: 'foot' },
               myIdea && h('div', { class: 'row owner-actions' },
@@ -410,21 +488,22 @@
                   class: 'ghost small danger', 'data-testid': 'delete-idea',
                   onclick: async () => { if (confirm(t('wish.deleteConfirm'))) { await api('DELETE', `/ideas/${w.id}`); refresh(); } },
                 }, t('wish.delete'))),
-              h('div', { class: 'claim-bar', role: 'group', 'aria-label': t('claim.title') }, btn('gift'), btn('contribute'), btn('purchased')),
-              mine && h('div', { class: 'my-choice' },
-                h('span', {}, t('claim.yourChoice', { choice: t(`claim.${mine.type}`) })),
-                h('button', {
-                  class: 'small', 'data-testid': 'claim-remove',
-                  onclick: async () => { await api('DELETE', `/wishes/${w.id}/claim`); refresh(); },
-                }, `↩ ${t('claim.remove')}`)),
+              multi && h('div', { class: `stock${w.remaining === 0 ? ' out' : ''}`, 'data-testid': 'stock' },
+                h('span', {}, t('claim.stock', { taken: w.taken, total: w.quantity })),
+                h('strong', {}, w.remaining === 0 ? t('claim.soldOut') : t('claim.free', { count: w.remaining })),
+                h('label', { class: 'amount' }, t('claim.amount'), amountInput)),
+              h('div', { class: 'claim-bar', role: 'group', 'aria-label': t('claim.title') }, btn('gift'), btn('contribute')),
+              // The amount only makes sense (and is only shown) for those who take part; a full gift needs none.
+              mine?.type === 'contribute' && h('label', { class: 'contrib' }, t('claim.contribution'), contribInput, h('span', {}, '€')),
               w.claims.length === 0
                 ? h('p', { class: 'claimers empty' }, t('claim.none'))
                 : h('ul', { class: 'claimers', 'data-testid': 'claims' }, w.claims.map((c) => h('li', {},
                   avatar({ id: c.userId, firstName: c.firstName, lastName: c.lastName }, 'sm'),
                   h('span', {}, t('claim.by', {
                     name: c.userId === user.id ? t('claim.you') : fullName(c),
-                    type: t(`claim.type.${c.type}`),
-                  })))))));
+                    type: typeText(c),
+                  }))))),
+              commentSection(w, owner, refresh)));
         })),
     ]);
     pollPending(wishes, () => userWishesView(id, attempt + 1), attempt);

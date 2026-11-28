@@ -13,6 +13,8 @@ function loadConfig(env = process.env) {
     operatorName: (env.OPERATOR_NAME || '').trim().slice(0, 80),
     sessionTtlHours: int(env.SESSION_TTL_HOURS, 24 * 14),
     cookieSecure: bool(env.COOKIE_SECURE, publicUrl.startsWith('https://')),
+    // Max. registrations / logins per minute and IP (brute-force protection); raised only for automated tests.
+    authRateLimit: int(env.AUTH_RATE_LIMIT, 20),
     trustProxy: bool(env.TRUST_PROXY, false),
     // Link previews refuse internal addresses (SSRF protection); only enable for tests / trusted setups.
     previewAllowPrivate: bool(env.PREVIEW_ALLOW_PRIVATE, false),

@@ -48,6 +48,14 @@ CREATE TABLE IF NOT EXISTS wish_links (
   preview_site TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_wish_links_wish ON wish_links(wish_id);
+CREATE TABLE IF NOT EXISTS wish_comments (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  wish_id INTEGER NOT NULL REFERENCES wishes(id) ON DELETE CASCADE,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  body TEXT NOT NULL,
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_wish_comments_wish ON wish_comments(wish_id);
 CREATE TABLE IF NOT EXISTS claims (
   wish_id INTEGER NOT NULL REFERENCES wishes(id) ON DELETE CASCADE,
   user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -111,6 +119,22 @@ function openDatabase(file) {
     db.exec('ALTER TABLE users ADD COLUMN is_admin INTEGER NOT NULL DEFAULT 0');
   }
   migrateEmailOptional(db);
+  // Migration: quantity of a wish (how many are needed) and the amount a claimer takes over.
+  if (!db.prepare('PRAGMA table_info(wishes)').all().some((c) => c.name === 'quantity')) {
+    db.exec('ALTER TABLE wishes ADD COLUMN quantity INTEGER NOT NULL DEFAULT 1');
+  }
+  if (!db.prepare('PRAGMA table_info(claims)').all().some((c) => c.name === 'amount')) {
+    db.exec('ALTER TABLE claims ADD COLUMN amount INTEGER NOT NULL DEFAULT 1');
+  }
+  // Migration: how much somebody contributes (in cents, optional; only for type 'contribute').
+  if (!db.prepare('PRAGMA table_info(claims)').all().some((c) => c.name === 'contribution_cents')) {
+    db.exec('ALTER TABLE claims ADD COLUMN contribution_cents INTEGER');
+  }
+  // Migration: "bought" was merged into "gift" (one choice "I give this"). Nothing is lost except the distinction itself:
+  // the same user keeps the same claim with the same amount and timestamp. A user has at most one claim per wish
+  // (primary key), so no row can collide. The CHECK constraint still lists the old value (SQLite cannot change it
+  // without rebuilding the table), the application simply never writes it any more.
+  db.exec("UPDATE claims SET type = 'gift' WHERE type = 'purchased'");
   // Migration: ideas. A wish with `suggested_by` set is an idea someone else added FOR the owner (owner_id);
   // the owner never sees it. (Deleting the suggester removes their ideas.)
   if (!db.prepare('PRAGMA table_info(wishes)').all().some((c) => c.name === 'suggested_by')) {
